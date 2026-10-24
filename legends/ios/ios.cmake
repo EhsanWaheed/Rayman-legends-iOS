@@ -45,20 +45,20 @@ target_link_libraries(rayman_legends PRIVATE
     "-framework CoreHaptics" "-framework UniformTypeIdentifiers")
 
 # The app's dynamic libraries go in Frameworks/: the runtime (linked, found by
-# the @rpath above), the Xenos GPU plugin and MoltenVK (both loaded at run time
-# from Frameworks/: gpu_plugin_loader.cpp, vulkan_instance.cpp).
-add_dependencies(rayman_legends MoltenVK rexgpu-xenos)
+# the @rpath above) and the Xenos GPU plugin (loaded at run time from
+# Frameworks/: gpu_plugin_loader.cpp).
+add_dependencies(rayman_legends rexgpu-xenos)
 set(_rl_frameworks "$<TARGET_BUNDLE_DIR:rayman_legends>/Frameworks")
 add_custom_command(TARGET rayman_legends POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "${_rl_frameworks}"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:MoltenVK>" "${_rl_frameworks}/libMoltenVK.dylib"
-    COMMAND install_name_tool -id @rpath/libMoltenVK.dylib "${_rl_frameworks}/libMoltenVK.dylib"
+    # A MoltenVK left from a build with Vulkan.
+    COMMAND ${CMAKE_COMMAND} -E rm -f "${_rl_frameworks}/libMoltenVK.dylib"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:rexruntime>" "$<TARGET_FILE:rexgpu-xenos>"
             "${_rl_frameworks}/"
     # rexglue_configure_target stages the plugin beside the executable, as on a desktop.
     COMMAND ${CMAKE_COMMAND} -E rm -f "$<TARGET_BUNDLE_DIR:rayman_legends>/$<TARGET_FILE_NAME:rexgpu-xenos>"
             "$<TARGET_BUNDLE_DIR:rayman_legends>/$<TARGET_FILE_NAME:rexruntime>"
-    COMMENT "Embedding the runtime, the GPU plugin and MoltenVK"
+    COMMENT "Embedding the runtime and the GPU plugin"
     VERBATIM)
 
 # The launcher's cover art, when there is one (ios/LauncherArt.png, the owner's
@@ -108,7 +108,6 @@ endif()
 if(NOT CMAKE_GENERATOR STREQUAL "Xcode")
     add_custom_command(TARGET rayman_legends POST_BUILD
         COMMAND codesign --force --sign - --timestamp=none
-                "$<TARGET_BUNDLE_DIR:rayman_legends>/Frameworks/libMoltenVK.dylib"
                 "$<TARGET_BUNDLE_DIR:rayman_legends>/Frameworks/$<TARGET_FILE_NAME:rexruntime>"
                 "$<TARGET_BUNDLE_DIR:rayman_legends>/Frameworks/$<TARGET_FILE_NAME:rexgpu-xenos>"
         COMMAND codesign --force --sign - --timestamp=none "$<TARGET_BUNDLE_DIR:rayman_legends>"

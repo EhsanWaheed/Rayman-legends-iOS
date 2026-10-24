@@ -10,15 +10,10 @@ void rl_ios_overlay_start(void);
 // video mode is below 1280x720, 1080p otherwise. Call once, before the game starts.
 int rl_ios_game_rows(void);
 
-// Whether the game shows PlayStation button prompts this launch: the settings' choice, or (Auto) a PlayStation
-// controller connected. Call once, before the game starts.
-bool rl_ios_playstation_prompts(void);
 // The Help screen's controller art: "dualsense" with a DualSense connected, "backbone" otherwise.
 const char *rl_ios_help_pad(void);
 
-// The GPU backend for this launch, from the settings: "metal" (native) or "vulkan" (through MoltenVK).
-const char *rl_ios_gpu_backend(void);
-// With the Metal backend: Metal 4 command queues where supported (after rl_ios_gpu_backend).
+// Metal 4 command queues where supported, or Metal 3 only, from the settings.
 bool rl_ios_metal4(void);
 
 // The screen's aspect ratio (long side / short side) when the game is to be drawn at the screen's own shape

@@ -5,11 +5,11 @@ emulator and no JIT, so it plays under LiveContainer or SideStore.
 
 The game's PowerPC code is translated ahead of time with the [**ReXGlue SDK**](https://github.com/rexglue/rexglue-sdk)
 (Xenia-based Xbox 360 recompilation). This repository is the iOS port on top of it: the app, the launcher and
-settings, the controller support, and a native **Metal 4** GPU backend for the SDK (the SDK's Vulkan path through
-MoltenVK stays as a fallback).
+settings, the controller support, and a native **Metal 4** GPU backend for the SDK (Metal 3 where Metal 4 isn't
+available). No Vulkan or MoltenVK.
 
 **[Download the latest release](https://github.com/EhsanWaheed/Rayman-legends-iOS/releases/latest)**
-(`RaymanLegendsIOS-NGF.ipa`, version 0.19). The IPA contains **no game files**: you add your own copy of the game.
+(`RaymanLegendsIOS-NGF.ipa`, version 0.20). The IPA contains **no game files**: you add your own copy of the game.
 
 Fan project, not affiliated with or endorsed by Ubisoft or Microsoft.
 
@@ -17,16 +17,16 @@ Fan project, not affiliated with or endorsed by Ubisoft or Microsoft.
 
 - **Native, no JIT.** The whole game runs as statically recompiled ARM64 code.
 - **Native Metal renderer.** The Xbox 360 GPU (Xenos) emulated on Metal 4 (argument tables, residency sets,
-  explicit barriers), Metal 3 where Metal 4 isn't available. 60 fps through levels on an iPhone 17 Pro Max at a
-  nominal thermal state. Metal 4, Metal 3 or Vulkan (MoltenVK) can be picked in the settings.
+  explicit barriers), Metal 3 where Metal 4 isn't available (or picked in the settings). 60 fps through levels on
+  an iPhone 17 Pro Max at a nominal thermal state.
 - **Widescreen.** The game drawn at the screen's own shape (more of each level, the HUD in its corners), or 16:9
   fitted, filled or stretched.
 - **MetalFX upscaling** from the game's 720p to the screen.
-- **Low power mode** for phones without a vapor chamber: lighter output settings to keep the phone cool.
+- **Low power mode** for phones without a vapor chamber: the game at 16:9 (1280x720) instead of the screen's
+  shape, shown at 720p without MetalFX, to keep the phone cool.
 - **Controllers.** Backbone One (PlayStation Edition too), DualSense, DualShock 4, Xbox and other MFi
-  controllers, hot-plugged. With a PlayStation-style pad the game shows PlayStation button prompts everywhere,
-  and the pause menu's **Help** screen shows the controller you hold: a Backbone One, or a DualSense when one is
-  connected.
+  controllers, hot-plugged. The game shows PlayStation button prompts everywhere, and the pause menu's **Help**
+  screen shows a Backbone One, or a DualSense when one is connected.
 - **Liquid Glass launcher** with your box art: Play, import the game from a folder, a ZIP or the disc image
   (checked before it is used), export and import saves.
 - **Settings panel** over the game: **L3 + R3**, a three-finger tap, or **Cmd+S**. Display, renderer, upscaler,
@@ -78,7 +78,6 @@ The game's recompiled code is generated from your own `default.xex`, so it isn't
 git clone --recursive https://github.com/EhsanWaheed/Rayman-legends-iOS.git
 cd Rayman-legends-iOS
 git -C rexglue-sdk apply ../patches/rexglue-sdk-ios.patch
-git -C rexglue-sdk/thirdparty/moltenvk apply ../../../patches/moltenvk-ios.patch
 ```
 
 1. Extract the game next to the project: `python3 tools/extract_xiso.py <game.iso> game`.
@@ -104,5 +103,5 @@ over the game's own atlas, and `tools/x360tex.py` encodes them.
 
 - [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk) and [Xenia](https://github.com/xenia-project/xenia), whose
   GPU emulation the Metal backend follows.
-- [metal-cpp](https://developer.apple.com/metal/cpp/), [SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross),
-  [MoltenVK](https://github.com/KhronosGroup/MoltenVK).
+- [metal-cpp](https://developer.apple.com/metal/cpp/), [SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross)
+  (fetched at configure time), [glslang](https://github.com/KhronosGroup/glslang).

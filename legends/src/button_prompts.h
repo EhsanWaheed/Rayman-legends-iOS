@@ -9,12 +9,11 @@
 #pragma once
 
 #include <cstdint>
-#include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -57,10 +56,10 @@ struct BoneMove {
 // pixels per unit; 4 right, 50.6 per unit), 8 the angle, 16 the length.
 inline std::vector<BoneMove> HelpPadBones(const std::string& pad) {
   if (pad == "dualsense") {
-    // The DualSense's left stick at (145, 192) of the atlas, the Xbox pad's at (80, 113); the Move line from
-    // there back to its label: 29.3 degrees steeper, 2.13 times as long.
-    const float up = -79.0f / 139.0f, right = 65.0f / 50.6f;
-    return {{2, 0, up}, {2, 4, right}, {16, 0, up}, {16, 4, right}, {16, 8, -0.511f}, {16, 16, 1.122f}};
+    // The DualSense's left stick at (139, 184) of the atlas, the Xbox pad's at (80, 113); the Move line from
+    // there back to its label: 27.9 degrees steeper, 2.01 times as long.
+    const float up = -71.4f / 139.0f, right = 59.0f / 50.6f;
+    return {{2, 0, up}, {2, 4, right}, {16, 0, up}, {16, 4, right}, {16, 8, -0.487f}, {16, 16, 1.005f}};
   }
   return {};
 }
@@ -147,26 +146,18 @@ inline bool EndsWith(const std::string& s, const char* suffix) {
 // Help screen controller (a .tga.ckd at the atlas's size and format), or empty.
 inline void UsePlayStationPrompts(const std::filesystem::path& game_root,
                                   const std::filesystem::path& help_pad = {},
-                                  std::vector<BoneMove> bone_moves = {}) {
-  // Development: RL_HELP_BONES="bone:field:delta,..." changes Help screen bones.
-  if (const char* bones = std::getenv("RL_HELP_BONES"); bones && *bones) {
-    bone_moves.clear();
-    for (const char* p = bones; *p;) {
-      BoneMove move{};
-      if (std::sscanf(p, "%u:%d:%f", &move.bone, &move.field, &move.delta) == 3) bone_moves.push_back(move);
-      p = std::strchr(p, ',');
-      if (!p) break;
-      ++p;
-    }
-  }
-  std::vector<uint8_t> help_pad_data;
+                                  const std::vector<BoneMove>& bone_moves = {}) {
+  // Shared by every bundle that has the atlas (each level's does).
+  std::shared_ptr<const std::vector<uint8_t>> help_pad_data;
   if (!help_pad.empty()) {
-    help_pad_data = ReadWholeFile(help_pad);
-    if (help_pad_data.size() < 0x68 || std::memcmp(help_pad_data.data() + 4, "TEX", 3) != 0) {
+    auto data = std::make_shared<std::vector<uint8_t>>(ReadWholeFile(help_pad));
+    if (data->size() >= 0x68 && std::memcmp(data->data() + 4, "TEX", 3) == 0) {
+      help_pad_data = std::move(data);
+    } else {
       REXLOG_WARN("Button prompts: no Help screen controller at {}", help_pad.string());
-      help_pad_data.clear();
     }
   }
+  int help_pad_bundles = 0;
   int patched = 0;
   std::error_code ec;
   for (const auto& file : std::filesystem::directory_iterator(game_root, ec)) {
@@ -191,17 +182,17 @@ inline void UsePlayStationPrompts(const std::filesystem::path& game_root,
       in.read(reinterpret_cast<char*>(header), sizeof(header));
       data_base = be32(header + 0x0C);
     }
-    auto replace = [&](const Entry& entry, const std::vector<uint8_t>& data) {
+    auto replace = [&](const Entry& entry, const std::shared_ptr<const std::vector<uint8_t>>& data) {
       if (size_error || append_at < data_base) {
         return false;
       }
       rex::filesystem::AddHostFileReadPatch(file.path(), append_at, data);
       std::vector<uint8_t> fields(entry.fields, entry.fields + sizeof(entry.fields));
-      put_be(&fields[0], data.size(), 4);       // size
+      put_be(&fields[0], data->size(), 4);      // size
       put_be(&fields[4], 0, 4);                 // compressed size: stored
       put_be(&fields[16], append_at - data_base, 8);  // offset
       rex::filesystem::AddHostFileReadPatch(file.path(), entry.record, std::move(fields));
-      append_at = (append_at + data.size() + 0xFFF) & ~uint64_t(0xFFF);
+      append_at = (append_at + data->size() + 0xFFF) & ~uint64_t(0xFFF);
       ++patched;
       return true;
     };
@@ -228,8 +219,8 @@ inline void UsePlayStationPrompts(const std::filesystem::path& game_root,
     }
     for (const Entry& e : table) {
       if (!EndsWith(e.path, kHelpPadAtlas)) continue;
-      if (!help_pad_data.empty() && replace(e, help_pad_data)) {
-        REXLOG_INFO("Button prompts: Help screen controller {}", help_pad.filename().string());
+      if (help_pad_data && replace(e, help_pad_data)) {
+        ++help_pad_bundles;
         continue;
       }
       for (const Entry& ps3 : table) {
@@ -251,7 +242,8 @@ inline void UsePlayStationPrompts(const std::filesystem::path& game_root,
       if (twin != by_path.end() && twin->second != &e) swap(e, *twin->second);
     }
   }
-  REXLOG_INFO("Button prompts: PlayStation ({} bundle entries)", patched);
+  REXLOG_INFO("Button prompts: PlayStation ({} bundle entries); Help screen controller {} ({} bundles)",
+              patched, help_pad_data ? help_pad.filename().string() : "PS3", help_pad_bundles);
 }
 
 }  // namespace rl_prompts

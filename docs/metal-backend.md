@@ -89,3 +89,16 @@ Measured on the M3 Air, level 1 benchmark, either order: Metal 4 ~59 fps (~11–
 
 Next: binary archives for pipelines (first-visit compile hitches), fewer serializing barriers (independent
 texture loads / resolves in parallel), texture loads straight into textures, merging transfers into passes.
+
+## 0.20
+
+- Metal only on Apple platforms: `REXGLUE_USE_VULKAN` defaults to OFF there (no MoltenVK, no Vulkan loader); the
+  Metal backend builds glslang (SPIR-V) and fetches SPIRV-Cross itself (the revision MoltenVK used, namespace
+  `MVK_spirv_cross`). `gpu_backend=any` picks Metal. The SDK's Vulkan sources are as upstream.
+- Ownership transfers into the attachments of the next draws run in those draws' render pass when the destination
+  is an attachment as it is and no transfer reads one (`PerformTransfersAndResolveClears(..., draw_targets)`):
+  ~6 fewer render passes a frame in level 1 (no store and reload in between); GPU time about the same on an M3.
+- Where the GPU time goes (level 1, Metal 4, M3): ownership transfers ~5 ms a frame, the game's draws ~4 ms,
+  texture loads, EDRAM dumps and resolves the rest. The game's own effects are cheap; skipping any of them saves
+  nothing measurable. Fewer transfers would need EDRAM emulated in shaders (raster order groups).
+- `rex/graphics/frame_stats.h` (RL_GPU_STATS) moved out of the Vulkan folder.

@@ -182,10 +182,10 @@ constexpr int kOutputStepCount = sizeof(kOutputSteps) / sizeof(kOutputSteps[0]);
 // Set when the game renders at the screen's own shape (Native widescreen at launch): a few percent wider than
 // the screen, cropped evenly at the sides whatever the picture mode.
 bool g_widescreen = false;
-// The renderer this launch runs on (rl_ios_gpu_backend), and the default choice: native Metal through Metal 4
-// command queues (Metal 3 on devices without), Metal 3 only, or Vulkan through MoltenVK.
-NSArray<NSString *> *const kRenderers = @[ @"metal", @"metal3", @"vulkan" ];
-NSArray<NSString *> *const kRendererNames = @[ @"Metal 4", @"Metal 3", @"Vulkan" ];
+// The renderer this launch runs on (rl_ios_gpu_backend), and the default choice: Metal 4 command queues (Metal 3
+// on devices without), or Metal 3 only. (An older choice, Vulkan, is gone: Metal 4 then.)
+NSArray<NSString *> *const kRenderers = @[ @"metal", @"metal3" ];
+NSArray<NSString *> *const kRendererNames = @[ @"Metal 4", @"Metal 3" ];
 int g_renderer = 0;
 NSString *const kDefaultRenderer = @"metal";
 
@@ -434,7 +434,6 @@ NSString *thermal_text(NSProcessInfoThermalState s) {
 @property(nonatomic) UISwitch *sustainedSwitch;
 @property(nonatomic) UISwitch *lowPowerSwitch;
 @property(nonatomic) UISwitch *wideSwitch;
-@property(nonatomic) UISegmentedControl *prompts;
 @property(nonatomic) UILabel *gameRowsNote;
 @property(nonatomic) UISegmentedControl *renderer;
 @property(nonatomic) UILabel *rendererNote;
@@ -455,7 +454,7 @@ NSString *thermal_text(NSProcessInfoThermalState s) {
         return nil;
     _window = window;
     [defaults() registerDefaults:@{@"ios.showFps" : @NO, @"ios.outputRows" : @0, @"ios.metalfx" : @YES, @"ios.picture" : @1,
-                                   @"ios.gameRows" : @720, @"ios.sustained" : @NO, @"ios.prompts" : @0,
+                                   @"ios.gameRows" : @720, @"ios.sustained" : @NO,
                                    @"ios.widescreen" : @YES, @"ios.renderer" : kDefaultRenderer,
                                    @"ios.lowPower" : @NO}];
     apply_picture_fit((int)[defaults() integerForKey:@"ios.picture"]);
@@ -682,13 +681,14 @@ NSString *thermal_text(NSProcessInfoThermalState s) {
           control:self.gameRows],
         self.gameRowsNote,
         [self row:@"Renderer"
-             note:@"Metal: the Xbox 360 GPU emulated on Metal directly, the native path (less CPU work and "
-                  @"heat). Vulkan: through MoltenVK, the earlier builds' path. From the next launch of the game."
+             note:@"Metal 4: the newest Metal (less CPU work; iOS 26 and an A14 or later, Metal 3 otherwise). "
+                  @"Metal 3: for comparison, or if Metal 4 misbehaves. From the next launch of the game."
           control:self.renderer],
         self.rendererNote,
         [self row:@"Low power"
-             note:@"The least GPU work and heat: the game's 720p picture stretched to the screen, no MetalFX. "
-                  @"For phones without a vapor chamber (or when warm); the picture is softer."
+             note:@"The least GPU work and heat: the game at 16:9 (1280x720, from the next launch) instead of "
+                  @"the screen's shape, its picture stretched to the screen without MetalFX. For phones without "
+                  @"a vapor chamber (or when warm); the picture is softer, with bars at the sides."
           control:self.lowPowerSwitch],
         [self row:@"Sustained performance"
              note:UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad
@@ -773,10 +773,6 @@ NSString *thermal_text(NSProcessInfoThermalState s) {
       apply_output_rows(self.window);
       [self refreshUpscalerNote];
     });
-}
-
-- (void)promptsChanged:(UISegmentedControl *)s {
-    [defaults() setInteger:s.selectedSegmentIndex forKey:@"ios.prompts"];
 }
 
 - (void)gameRowsChanged:(UISegmentedControl *)s {
@@ -946,16 +942,6 @@ NSString *thermal_text(NSProcessInfoThermalState s) {
                                               control:nil]];
     for (GCController *c in GCController.controllers)
         [self.controller addArrangedSubview:[self controllerCard:c]];
-    if (!self.prompts) {
-        self.prompts = [[UISegmentedControl alloc] initWithItems:@[ @"Auto", @"Xbox", @"PlayStation" ]];
-        [self.prompts addTarget:self action:@selector(promptsChanged:) forControlEvents:UIControlEventValueChanged];
-    }
-    self.prompts.selectedSegmentIndex = [defaults() integerForKey:@"ios.prompts"];
-    [self.controller addArrangedSubview:[self row:@"Button prompts"
-                                             note:@"The buttons the game shows. Auto: PlayStation for a DualSense, "
-                                                  @"DualShock or Backbone PlayStation Edition, Xbox otherwise. From "
-                                                  @"the next launch of the game."
-                                          control:self.prompts]];
     [self.controller addArrangedSubview:[self section:@"Shortcuts"]];
     [self.controller addArrangedSubview:[self row:@"This panel"
                                              note:@"L3 + R3, a three-finger tap, or Cmd+S on a keyboard. B (circle) "
@@ -1093,30 +1079,22 @@ void install_on_main() {
 }
 }  // namespace
 
-const char *rl_ios_gpu_backend(void) {
+bool rl_ios_metal4(void) {
     [defaults() registerDefaults:@{@"ios.renderer" : kDefaultRenderer}];
     g_renderer = chosen_renderer();
-    return g_renderer == 2 ? "vulkan" : "metal";
-}
-
-bool rl_ios_metal4(void) {
     return g_renderer == 0;
 }
 
 double rl_ios_widescreen_aspect(void) {
     [defaults() registerDefaults:@{@"ios.widescreen" : @YES}];
-    if (![defaults() boolForKey:@"ios.widescreen"])
+    // Low power: the game's own 16:9 (1280x720), fewer pixels than the screen's shape.
+    if (![defaults() boolForKey:@"ios.widescreen"] || low_power())
         return 0;
     g_widescreen = true;
     const CGSize s = UIScreen.mainScreen.nativeBounds.size;
     return std::max(s.width, s.height) / std::max(1.0, std::min(s.width, s.height));
 }
 
-bool rl_ios_playstation_prompts(void) {
-    [defaults() registerDefaults:@{@"ios.prompts" : @0}];
-    const NSInteger choice = [defaults() integerForKey:@"ios.prompts"];
-    return choice == 2 || (choice == 0 && rl_pad_family() == 1);
-}
 
 const char *rl_ios_help_pad(void) {
     for (GCController *c in GCController.controllers) {

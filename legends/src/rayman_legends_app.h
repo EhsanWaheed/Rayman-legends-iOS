@@ -35,8 +35,6 @@ REXCVAR_DECLARE(int32_t, video_mode_height);
 #endif
 REXCVAR_DECLARE(bool, mnk_mode);
 REXCVAR_DECLARE(bool, present_guest_output_aspect);
-REXCVAR_DECLARE(bool, vulkan_allow_present_mode_immediate);
-REXCVAR_DECLARE(bool, vulkan_allow_present_mode_mailbox);
 REXCVAR_DECLARE(std::string, keybind_a);
 REXCVAR_DECLARE(std::string, keybind_b);
 REXCVAR_DECLARE(std::string, keybind_x);
@@ -98,18 +96,16 @@ class RaymanLegendsApp : public rex::ReXApp {
       REXCVAR_SET(video_mode_width, 1024);
       REXCVAR_SET(video_mode_height, 576);
     }
-    // Native Metal or Vulkan through MoltenVK, as chosen in the settings.
-    REXCVAR_SET(gpu_backend, std::string(rl_ios_gpu_backend()));
+    // Native Metal: Metal 4, or Metal 3 as chosen in the settings.
+    REXCVAR_SET(gpu_backend, std::string("metal"));
     REXCVAR_SET(metal4, rl_ios_metal4());
-    // PlayStation button prompts for a PlayStation controller (or as chosen in the settings).
-    // The Help screen's controller: a DualSense when one is connected, else the Backbone One.
-    if (rl_ios_playstation_prompts()) {
-      const std::string help_pad = rl_ios_help_pad();
-      rl_prompts::UsePlayStationPrompts(
-          paths.game_data_root,
-          rex::filesystem::GetExecutableFolder() / ("help_pad_" + help_pad + ".tga.ckd"),
-          rl_prompts::HelpPadBones(help_pad));
-    }
+    // PlayStation button prompts; the Help screen's controller a DualSense when one is connected, else the
+    // Backbone One.
+    const std::string help_pad = rl_ios_help_pad();
+    rl_prompts::UsePlayStationPrompts(
+        paths.game_data_root,
+        rex::filesystem::GetExecutableFolder() / ("help_pad_" + help_pad + ".tga.ckd"),
+        rl_prompts::HelpPadBones(help_pad));
     // The settings panel (L3 + R3, a three-finger tap, Cmd+S), over the game's first frame.
     rl_ios_overlay_start();
     paths.user_data_root = documents / "Saves";
@@ -133,8 +129,8 @@ class RaymanLegendsApp : public rex::ReXApp {
 #endif
 
 #if !REX_PLATFORM_IOS
-  // Development: RL_PS_PROMPTS=1 shows the PlayStation button prompts (RL_HELP_PAD=dualsense for the
-  // DualSense Help screen controller, the Backbone One's otherwise); RL_ASPECT=<w/h> renders the game at
+  // PlayStation button prompts as on iOS (development: RL_HELP_PAD=dualsense for the DualSense Help screen
+  // controller, the Backbone One's otherwise); RL_ASPECT=<w/h> renders the game at
   // that shape (with --video_mode_width=1024 --video_mode_height=576, its 720p mode).
   void OnConfigurePaths(rex::PathConfig& paths) override {
     if (const char* aspect = std::getenv("RL_ASPECT")) {
@@ -142,10 +138,7 @@ class RaymanLegendsApp : public rex::ReXApp {
       RlSetRenderSize(size);
       REXCVAR_SET(present_guest_output_aspect, true);
     }
-    // Presents in step with the display: the Mac's default modes paint far faster than the game draws.
-    REXCVAR_SET(vulkan_allow_present_mode_immediate, false);
-    REXCVAR_SET(vulkan_allow_present_mode_mailbox, false);
-    if (std::getenv("RL_PS_PROMPTS") && !paths.game_data_root.empty()) {
+    if (!paths.game_data_root.empty()) {
       const char* help_pad_env = std::getenv("RL_HELP_PAD");
       const std::string help_pad = help_pad_env ? help_pad_env : "backbone";
       rl_prompts::UsePlayStationPrompts(
