@@ -36,18 +36,39 @@ Fan project, not affiliated with or endorsed by Ubisoft or Microsoft.
 
 - An iPhone or iPad on **iOS 17 or later** (Metal 4 needs iOS 26 and an A14 or later), with
   [LiveContainer](https://github.com/LiveContainer/LiveContainer) or SideStore.
-- **Your own dump of the Xbox 360 game** (Redump: *Rayman Legends (USA, Europe)*): the disc image (`.iso`), or its
-  files (the folder with `default.xex` and the `.ipk` bundles).
+- **Your own dump of the Xbox 360 game**, the Redump release *Rayman Legends (USA, Europe)*. The app checks its
+  `default.xex` and turns away other versions.
+
+From the disc, you need **all** of its files (about 6.4 GB):
+
+| Copy this | |
+|---|---|
+| `default.xex` | the game itself |
+| every `.ipk` file (`Bundle_X360.ipk`, `fullLogic_X360.ipk`, the levels' bundles…) | the game's data |
+| `EngineData`, `UplayMedia` and the other files beside them | the rest of the disc |
+
+Have the disc image (`.iso`) instead? The app can import that directly (see below), or extract it on a computer
+with `tools/extract_xiso.py`.
 
 ## Install
 
 1. Install `RaymanLegendsIOS-NGF.ipa` from
    [Releases](https://github.com/EhsanWaheed/rayman-legends-ios/releases/latest) with LiveContainer or SideStore,
    and open it once so its Documents folder exists.
-2. Open the app and import the game from the launcher: pick the game's folder, a ZIP of it, or the `.iso`. Or copy the game's files
-   into a folder named **`game`** in the app's **Documents** folder yourself (Files app, or Finder with the device
-   plugged in).
-3. The launcher checks the game once and shows **Ready to play**.
+2. Put the disc's files in a folder named exactly **`game`**, so you have `game/default.xex`,
+   `game/Bundle_X360.ipk` and so on.
+3. Copy that **`game`** folder into the app's **Documents** folder (Files app, or Finder with the device plugged in):
+   - **LiveContainer**: Files → On My iPhone → **LiveContainer** → `Data` → `Application` → the app's data folder
+     (its name is shown in LiveContainer's settings for the app) → **`Documents`** → put `game` there.
+   - **SideStore** (installed as a normal app): Files → On My iPhone → **Rayman Legends** → put `game` there.
+4. Open the app: the launcher checks the game once (a few seconds) and shows **Ready to play**.
+
+Prefer not to copy files by hand? Open the app without a `game` folder and use **Import game folder…**,
+**Import game ZIP…** or **Import disc image (.iso)…**: pick it wherever it is (Files, iCloud Drive) and the
+launcher copies the game into `Documents/game`.
+
+Updating: install the new IPA over the old one; your game and saves stay. Saves can also be exported and imported
+from the launcher.
 
 ## Building
 
@@ -72,9 +93,10 @@ cmake -S legends -B legends/out/build/ios -G Ninja -DCMAKE_SYSTEM_NAME=iOS -DCMA
 cmake --build legends/out/build/ios
 ```
 
-The app is signed ad hoc; LiveContainer or SideStore re-sign it. Optional, kept out of git: `legends/ios/LauncherArt.png`
-(your box art, also made into the app icon) and the Help screen's controllers in `legends/art`
-(`tools/make_pad_art.py` paints them over the game's own atlas, `tools/x360tex.py` encodes them).
+The app is signed ad hoc; LiveContainer or SideStore re-sign it. `legends/ios/LauncherArt.png` is the launcher's
+cover (also made into the app icon). The pause menu Help screen's controllers are in `legends/art`:
+`tools/make_pad_art.py` paints them (the Backbone One from `art/backbone_one_source.webp`, the DualSense drawn)
+over the game's own atlas, and `tools/x360tex.py` encodes them.
 
 `docs/metal-backend.md` describes the Metal backend.
 

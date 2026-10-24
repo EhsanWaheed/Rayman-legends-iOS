@@ -7,13 +7,14 @@
 !/tools/
 !/docs/
 !/patches/
+!/art/
+/art/*
+!/art/backbone_one_source.webp
 !/rexglue-sdk
 
 legends/out/
 legends/generated/*
 !legends/generated/rexglue.cmake
-legends/art/
-legends/ios/LauncherArt.png
 legends/ios/*.mobileprovision
 __pycache__/
 .DS_Store
