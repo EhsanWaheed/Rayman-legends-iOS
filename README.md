@@ -8,7 +8,7 @@ The game's PowerPC code is translated ahead of time with the [**ReXGlue SDK**](h
 settings, the controller support, and a native **Metal 4** GPU backend for the SDK (the SDK's Vulkan path through
 MoltenVK stays as a fallback).
 
-**[Download the latest release](https://github.com/EhsanWaheed/rayman-legends-ios/releases/latest)**
+**[Download the latest release](https://github.com/EhsanWaheed/Rayman-legends-iOS/releases/latest)**
 (`RaymanLegendsIOS-NGF.ipa`, version 0.19). The IPA contains **no game files**: you add your own copy of the game.
 
 Fan project, not affiliated with or endorsed by Ubisoft or Microsoft.
@@ -53,7 +53,7 @@ with `tools/extract_xiso.py`.
 ## Install
 
 1. Install `RaymanLegendsIOS-NGF.ipa` from
-   [Releases](https://github.com/EhsanWaheed/rayman-legends-ios/releases/latest) with LiveContainer or SideStore,
+   [Releases](https://github.com/EhsanWaheed/Rayman-legends-iOS/releases/latest) with LiveContainer or SideStore,
    and open it once so its Documents folder exists.
 2. Put the disc's files in a folder named exactly **`game`**, so you have `game/default.xex`,
    `game/Bundle_X360.ipk` and so on.
@@ -75,8 +75,8 @@ from the launcher.
 The game's recompiled code is generated from your own `default.xex`, so it isn't in this repository.
 
 ```bash
-git clone --recursive https://github.com/EhsanWaheed/rayman-legends-ios.git
-cd rayman-legends-ios
+git clone --recursive https://github.com/EhsanWaheed/Rayman-legends-iOS.git
+cd Rayman-legends-iOS
 git -C rexglue-sdk apply ../patches/rexglue-sdk-ios.patch
 git -C rexglue-sdk/thirdparty/moltenvk apply ../../../patches/moltenvk-ios.patch
 ```
