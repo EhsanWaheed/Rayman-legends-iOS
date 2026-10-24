@@ -7,8 +7,8 @@ trigger pieces and the shadow below. The guide's lines end where that layout has
 face buttons top right. This repaints the atlas, piece for piece in the same places:
 
   backbone   the Backbone One PlayStation Edition (art/backbone_one_source.webp), which has the same layout
-  dualsense  a DualSense, drawn here, its face buttons where the lines end (its left stick is lower down: see
-             button_prompts.h for the guide's moved stick)
+  dualsense  a DualSense, from the line drawing art/dualsense_glyph_source.jpg, its face buttons where the lines end
+             (its left stick is lower down: see button_prompts.h for the guide's moved stick)
 
 usage: make_pad_art.py <backbone|dualsense> <xbox atlas png> <out png>
 """
@@ -143,158 +143,73 @@ def backbone(xbox):
     return atlas
 
 
-# The DualSense in the atlas: 400 pixels wide from x 1, its top at y 26; its face buttons' center where the Xbox
-# pad's is, its left stick lower down (button_prompts.h moves the guide's stick and Move line there).
-DS_W, DS_X, DS_Y = 400.0, 1.0, 26.0
-DS_H = DS_W * 0.66
+# The DualSense: the line drawing in art/dualsense_glyph_source.jpg (white on black), scaled so its face buttons'
+# center lands where the Xbox pad's is; its left stick lower down (button_prompts.h moves the guide's stick and Move
+# line there).
+DS_SOURCE_FACE = (423.3, 173.0)
+DS_SOURCE_STICK = (263.3, 209.0)
+DS_SCALE = 1.18
 
 
-def ds(u, v):
-    """A point of the DualSense in the atlas, from its front view's normalized coordinates."""
-    return DS_X + u * DS_W, DS_Y + v * DS_H
+def ds_atlas(x, y):
+    return FACE[0] + (x - DS_SOURCE_FACE[0]) * DS_SCALE, FACE[1] + (y - DS_SOURCE_FACE[1]) * DS_SCALE
 
 
-DUALSENSE_STICK = ds(0.345, 0.60)
+DUALSENSE_STICK = ds_atlas(*DS_SOURCE_STICK)
+LINE = (246, 247, 252)
+FILL = (16, 20, 40, 150)
 
 
-def catmull_rom(points, steps=24):
-    """A closed smooth curve through the points."""
-    out = []
-    n = len(points)
-    for i in range(n):
-        p0, p1, p2, p3 = points[i - 1], points[i], points[(i + 1) % n], points[(i + 2) % n]
-        for s in range(steps):
-            t = s / steps
-            t2, t3 = t * t, t * t * t
-            out.append(tuple(0.5 * (2 * p1[j] + (-p0[j] + p2[j]) * t + (2 * p0[j] - 5 * p1[j] + 4 * p2[j] - p3[j]) * t2 +
-                                    (-p0[j] + 3 * p1[j] - 3 * p2[j] + p3[j]) * t3) for j in range(2)))
-    return out
-
-
-def mirrored(left):
-    """A closed outline from its left half (top center to bottom center, clockwise around the left)."""
-    right = [(1 - u, v) for u, v in reversed(left[1:-1])]
-    return left + right
-
-
-# The outline: the top edge with the shoulders, the long grips tapering down and out, the arch between them.
-DS_OUTLINE = mirrored([(0.50, 0.035), (0.30, 0.03), (0.15, 0.035), (0.07, 0.08), (0.035, 0.17), (0.02, 0.32),
-                       (0.022, 0.50), (0.035, 0.68), (0.06, 0.84), (0.10, 0.95), (0.155, 0.995), (0.21, 0.98),
-                       (0.25, 0.92), (0.285, 0.82), (0.33, 0.74), (0.40, 0.70), (0.50, 0.69)])
-# The black core around the sticks and the PS button, up under the touchpad.
-DS_CORE = mirrored([(0.50, 0.30), (0.32, 0.30), (0.285, 0.40), (0.255, 0.55), (0.265, 0.68), (0.31, 0.745),
-                    (0.40, 0.705), (0.50, 0.695)])
+def stick_glyph(radius):
+    """The stick as the drawing has it: a dark cap in a white ring, a smaller ring inside."""
+    size = int(math.ceil(radius * 2 + 6)) * SS
+    im = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    c, r, w = size / 2, radius * SS, int(1.6 * SS)
+    d.ellipse((c - r, c - r, c + r, c + r), fill=(20, 24, 44, 230), outline=LINE + (255,), width=w)
+    r2 = r * 0.62
+    d.ellipse((c - r2, c - r2, c + r2, c + r2), outline=LINE + (255,), width=w)
+    return im.resize((size // SS, size // SS), Image.LANCZOS)
 
 
 def dualsense(xbox):
-    """A DualSense, drawn: the white shell and grips with the D-pad and face buttons, the black core with the
-    sticks and the PS button, the touchpad framed by its light bars. Its face buttons where the Xbox pad's are."""
     atlas = xbox.copy()
     clear(atlas, BODY)
-    k = SS
-    W, H = 512 * k, 320 * k
-    im = Image.new('RGBA', (W, H), (0, 0, 0, 0))
-    d = ImageDraw.Draw(im)
-
-    def P(u, v):
-        x, y = ds(u, v)
-        return x * k, y * k
-
-    def poly(points):
-        return [P(u, v) for u, v in catmull_rom(points)]
-
-    def ellipse(u, v, r_px):
-        x, y = P(u, v)
-        return (x - r_px * k, y - r_px * k, x + r_px * k, y + r_px * k)
-
-    # The shell: white, a little darker toward the bottom, a soft gray outline.
-    shell = Image.new('L', (W, H), 0)
-    ImageDraw.Draw(shell).polygon(poly(DS_OUTLINE), fill=255)
-    grad = Image.linear_gradient('L').resize((W, H))
-    white = Image.merge('RGB', (grad.point(lambda v: 248 - v * 30 // 255),
-                                grad.point(lambda v: 248 - v * 30 // 255),
-                                grad.point(lambda v: 252 - v * 26 // 255)))
-    rim = shell.filter(ImageFilter.MaxFilter(7))
-    im.paste((128, 131, 142, 255), (0, 0), rim)
-    im.paste(white, (0, 0), shell)
-    # a soft shadow inside the lower edge of the grips
-    inner = shell.filter(ImageFilter.MinFilter(9)).filter(ImageFilter.GaussianBlur(6 * k))
-    edge = Image.composite(Image.new('L', (W, H), 70), Image.new('L', (W, H), 0),
-                           Image.eval(inner, lambda v: 255 - v))
-    edge = Image.composite(edge, Image.new('L', (W, H), 0), shell)
-    im.paste((150, 152, 165, 255), (0, 0), edge)
-
-    # The black core.
-    core = Image.new('L', (W, H), 0)
-    ImageDraw.Draw(core).polygon(poly(DS_CORE), fill=255)
-    core = Image.composite(core, Image.new('L', (W, H), 0), shell)
-    dark = Image.merge('RGB', [Image.linear_gradient('L').resize((W, H)).point(lambda v: 42 - v * 20 // 255)] * 3)
-    im.paste(dark, (0, 0), core)
-
-    # The touchpad, flush with the top edge, its light bars down its lower corners.
-    tl, br = P(0.305, 0.035), P(0.695, 0.36)
-    d.rounded_rectangle((tl[0], tl[1], br[0], br[1]), 16 * k, fill=(238, 239, 244, 255),
-                        outline=(184, 186, 196, 255), width=2 * k)
-    d.rounded_rectangle((tl[0] + 10 * k, tl[1] + 2 * k, br[0] - 10 * k, tl[1] + 9 * k), 4 * k,
-                        fill=(250, 250, 253, 255))
-    for (u0, u1) in ((0.288, 0.300), (0.700, 0.712)):
-        a0, a1 = P(u0, 0.16), P(u1, 0.37)
-        d.rounded_rectangle((a0[0], a0[1], a1[0], a1[1]), 3 * k, fill=(66, 146, 255, 255))
-    # create and options
-    for u in (0.255, 0.745):
-        a0, a1 = P(u - 0.008, 0.12), P(u + 0.008, 0.20)
-        d.rounded_rectangle((a0[0], a0[1], a1[0], a1[1]), 3 * k, fill=(70, 72, 82, 255))
-
-    # The D-pad: four pointed buttons in a shallow well.
-    dx, dy = ds(0.19, 0.33)
-    d.ellipse(((dx - 36) * k, (dy - 36) * k, (dx + 36) * k, (dy + 36) * k), fill=(228, 230, 237, 255))
-    arrow = [(-9, -7), (9, -7), (9, 9), (0, 18), (-9, 9)]
-    for angle in (0, 90, 180, 270):
-        a = math.radians(angle)
-        pts = []
-        for x, y in arrow:
-            y += 9
-            rx, ry = x * math.cos(a) - y * math.sin(a), x * math.sin(a) + y * math.cos(a)
-            pts += [(dx + rx) * k, (dy + ry) * k]
-        d.polygon(pts, fill=(92, 95, 106, 255), outline=(124, 127, 140, 255))
-
-    # The face buttons, where the lines end: square left, circle right, triangle top, cross bottom.
-    fx, fy, gap, r = FACE[0], FACE[1], 30, 13
-    d.ellipse(((fx - 48) * k, (fy - 48) * k, (fx + 48) * k, (fy + 48) * k), fill=(228, 230, 237, 255))
-    sym = (220, 222, 230, 255)
-    for name, (bx, by) in {'triangle': (fx, fy - gap), 'square': (fx - gap, fy), 'circle': (fx + gap, fy),
-                           'cross': (fx, fy + gap)}.items():
-        d.ellipse(((bx - r) * k, (by - r) * k, (bx + r) * k, (by + r) * k), fill=(58, 60, 70, 255),
-                  outline=(100, 103, 116, 255), width=k)
-        w = max(2, int(1.8 * k))
-        if name == 'triangle':
-            d.polygon([(bx * k, (by - 7) * k), ((bx + 7) * k, (by + 5) * k), ((bx - 7) * k, (by + 5) * k)],
-                      outline=sym, width=w)
-        elif name == 'square':
-            d.rectangle(((bx - 6) * k, (by - 6) * k, (bx + 6) * k, (by + 6) * k), outline=sym, width=w)
-        elif name == 'circle':
-            d.ellipse(((bx - 7) * k, (by - 7) * k, (bx + 7) * k, (by + 7) * k), outline=sym, width=w)
-        else:
-            d.line(((bx - 6) * k, (by - 6) * k, (bx + 6) * k, (by + 6) * k), fill=sym, width=w)
-            d.line(((bx - 6) * k, (by + 6) * k, (bx + 6) * k, (by - 6) * k), fill=sym, width=w)
-
-    # The PS button and the mute button between the sticks.
-    d.ellipse(ellipse(0.5, 0.60, 8), fill=(16, 16, 20, 255), outline=(96, 98, 108, 255), width=k)
-    a0, a1 = P(0.485, 0.665), P(0.515, 0.68)
-    d.rounded_rectangle((a0[0], a0[1], a1[0], a1[1]), 2 * k, fill=(236, 122, 62, 255))
-
-    im = im.resize((512, 320), Image.LANCZOS)
-    # The sticks: the left one's socket (the guide's animated stick is drawn over it), the right one drawn.
-    socket(im, DUALSENSE_STICK, 21)
-    rs = stick_top(19)
-    rx, ry = ds(0.655, 0.60)
-    im.alpha_composite(rs, (int(rx - rs.width / 2), int(ry - rs.height / 2)))
+    src = Image.open(sys.path[0] + '/../art/dualsense_glyph_source.jpg').convert('L')
+    lines = np.asarray(src).astype(np.float32)
+    # The controller's inside: everything the lines enclose (the outside reached from the border).
+    from scipy import ndimage
+    walls = lines > 60
+    outside_labels, _ = ndimage.label(~walls)
+    border = set(outside_labels[0, :]) | set(outside_labels[-1, :]) | set(outside_labels[:, 0]) | set(outside_labels[:, -1])
+    outside = np.isin(outside_labels, [l for l in border if l])
+    inside = ~outside
+    # The left stick out of the drawing (still inside): the guide's animated stick is drawn there.
+    yy, xx = np.mgrid[0:lines.shape[0], 0:lines.shape[1]]
+    sx, sy = DS_SOURCE_STICK
+    lines[((xx - sx) / 24.0) ** 2 + ((yy - sy) / 21.0) ** 2 <= 1.0] = 0
+    # In the atlas: the fill, then the lines.
+    h, w = lines.shape
+    big = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+    fill_alpha = Image.fromarray((inside * FILL[3]).astype(np.uint8))
+    big.paste(FILL[:3] + (255,), (0, 0), fill_alpha)
+    line_alpha = Image.fromarray(np.clip((lines - 20) * 1.4, 0, 255).astype(np.uint8))
+    big.paste(LINE + (255,), (0, 0), line_alpha)
+    # alpha where both: lines over the fill
+    a = np.maximum(np.asarray(fill_alpha), np.asarray(line_alpha))
+    big.putalpha(Image.fromarray(a))
+    scaled = big.resize((round(w * DS_SCALE), round(h * DS_SCALE)), Image.LANCZOS)
+    x0 = round(FACE[0] - DS_SOURCE_FACE[0] * DS_SCALE)
+    y0 = round(FACE[1] - DS_SOURCE_FACE[1] * DS_SCALE)
     layer = Image.new('RGBA', atlas.size, (0, 0, 0, 0))
-    layer.paste(im.crop((0, 0, 512, 320)), (0, 0))
+    layer.paste(scaled, (x0, y0))
     layer = layer.crop(BODY)
     atlas.alpha_composite(layer, (BODY[0], BODY[1]))
     shadow_from(atlas, xbox, layer)
-    stick_pieces(atlas, 19)
+    for name, (box, center) in PIECES.items():
+        clear(atlas, box)
+        piece = stick_glyph(21 if name != 'shaft' else 12)
+        atlas.alpha_composite(piece, (int(round(center[0] - piece.width / 2)), int(round(center[1] - piece.height / 2))))
     triggers_clear(atlas)
     return atlas
 

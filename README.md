@@ -94,7 +94,8 @@ cmake --build legends/out/build/ios
 
 The app is signed ad hoc; LiveContainer or SideStore re-sign it. `legends/ios/LauncherArt.png` is the launcher's
 cover (also made into the app icon). The pause menu Help screen's controllers are in `legends/art`:
-`tools/make_pad_art.py` paints them (the Backbone One from `art/backbone_one_source.webp`, the DualSense drawn)
+`tools/make_pad_art.py` paints them (the Backbone One from `art/backbone_one_source.webp`, the DualSense from the
+line drawing `art/dualsense_glyph_source.jpg`)
 over the game's own atlas, and `tools/x360tex.py` encodes them.
 
 `docs/metal-backend.md` describes the Metal backend.

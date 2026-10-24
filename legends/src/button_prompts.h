@@ -56,10 +56,10 @@ struct BoneMove {
 // pixels per unit; 4 right, 50.6 per unit), 8 the angle, 16 the length.
 inline std::vector<BoneMove> HelpPadBones(const std::string& pad) {
   if (pad == "dualsense") {
-    // The DualSense's left stick at (139, 184) of the atlas, the Xbox pad's at (80, 113); the Move line from
-    // there back to its label: 27.9 degrees steeper, 2.01 times as long.
-    const float up = -71.4f / 139.0f, right = 59.0f / 50.6f;
-    return {{2, 0, up}, {2, 4, right}, {16, 0, up}, {16, 4, right}, {16, 8, -0.487f}, {16, 16, 1.005f}};
+    // The DualSense's left stick at (136, 155) of the atlas, the Xbox pad's at (80, 113); the Move line from
+    // there back to its label: 17.8 degrees steeper, 1.83 times as long.
+    const float up = -42.5f / 139.0f, right = 56.2f / 50.6f;
+    return {{2, 0, up}, {2, 4, right}, {16, 0, up}, {16, 4, right}, {16, 8, -0.311f}, {16, 16, 0.824f}};
   }
   return {};
 }
