@@ -27,6 +27,7 @@
 #include <mutex>
 
 REXCVAR_DECLARE(bool, present_metalfx);
+REXCVAR_DECLARE(bool, gpu_frame_skip);
 REXCVAR_DECLARE(bool, present_letterbox);
 REXCVAR_DECLARE(bool, present_allow_overscan_cutoff);
 REXCVAR_DECLARE(int32_t, present_safe_area_x);
@@ -222,7 +223,12 @@ bool sustained() { return [defaults() boolForKey:@"ios.sustained"]; }
 // tied to its frame rate.)
 bool low_power() { return [defaults() boolForKey:@"ios.lowPower"]; }
 
-void apply_metalfx() { REXCVAR_SET(present_metalfx, [defaults() boolForKey:@"ios.metalfx"] && !low_power()); }
+// Low power: MetalFX off, and every other frame drawn (the game at full speed, a 30 fps picture, half the GPU
+// work).
+void apply_metalfx() {
+    REXCVAR_SET(present_metalfx, [defaults() boolForKey:@"ios.metalfx"] && !low_power());
+    REXCVAR_SET(gpu_frame_skip, low_power());
+}
 
 int sustained_rows() {
     const bool pad = UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad;
@@ -686,9 +692,9 @@ NSString *thermal_text(NSProcessInfoThermalState s) {
           control:self.renderer],
         self.rendererNote,
         [self row:@"Low power"
-             note:@"The least GPU work and heat: the game at 16:9 (1280x720, from the next launch) instead of "
-                  @"the screen's shape, its picture stretched to the screen without MetalFX. For phones without "
-                  @"a vapor chamber (or when warm); the picture is softer, with bars at the sides."
+             note:@"About half the GPU work and less heat: every other frame drawn (a 30 fps picture, the game "
+                  @"itself at full speed), the 720p picture stretched to the screen without MetalFX. For phones "
+                  @"that get hot (no vapor chamber, titanium); the picture is softer and less smooth."
           control:self.lowPowerSwitch],
         [self row:@"Sustained performance"
              note:UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad
@@ -1087,8 +1093,7 @@ bool rl_ios_metal4(void) {
 
 double rl_ios_widescreen_aspect(void) {
     [defaults() registerDefaults:@{@"ios.widescreen" : @YES}];
-    // Low power: the game's own 16:9 (1280x720), fewer pixels than the screen's shape.
-    if (![defaults() boolForKey:@"ios.widescreen"] || low_power())
+    if (![defaults() boolForKey:@"ios.widescreen"])
         return 0;
     g_widescreen = true;
     const CGSize s = UIScreen.mainScreen.nativeBounds.size;

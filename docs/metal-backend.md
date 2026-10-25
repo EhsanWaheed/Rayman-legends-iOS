@@ -102,3 +102,10 @@ texture loads / resolves in parallel), texture loads straight into textures, mer
   texture loads, EDRAM dumps and resolves the rest. The game's own effects are cheap; skipping any of them saves
   nothing measurable. Fewer transfers would need EDRAM emulated in shaders (raster order groups).
 - `rex/graphics/frame_stats.h` (RL_GPU_STATS) moved out of the Vulkan folder.
+
+## 0.21
+
+- `gpu_frame_skip` (Low power on iOS): every other frame's draws and resolves are skipped and that frame isn't
+  presented; draws that memexport still run. The guest keeps its 60 Hz vblank, so the game runs at full speed with
+  a 30 fps picture. Level 1 on the M3: GPU time halved (fragment 2.64 s → 1.26 s per 4.5 s), process CPU time
+  -17%. A 15 Pro Max reached "serious" in about 10 minutes at 60 fps with the earlier Low power.

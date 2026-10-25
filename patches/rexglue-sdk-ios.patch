@@ -148,10 +148,10 @@ index 0000000..93fa42d
 +}  // namespace rex::graphics
 diff --git a/include/rex/graphics/metal/command_processor.h b/include/rex/graphics/metal/command_processor.h
 new file mode 100644
-index 0000000..dd2bb02
+index 0000000..d0a711c
 --- /dev/null
 +++ b/include/rex/graphics/metal/command_processor.h
-@@ -0,0 +1,272 @@
+@@ -0,0 +1,274 @@
 +/**
 + * @file        graphics/metal/command_processor.h
 + * @brief       The Xenos command processor on Metal
@@ -415,6 +415,8 @@ index 0000000..dd2bb02
 +  uint64_t vertex_buffers_in_sync_[2] = {};
 +
 +  std::vector<draw_util::MemExportRange> memexport_ranges_;
++  // gpu_frame_skip: this frame's draws and resolves skipped.
++  bool skipping_frame_ = false;
 +  std::vector<MTL::SamplerState*> current_samplers_vertex_;
 +  std::vector<MTL::SamplerState*> current_samplers_pixel_;
 +
@@ -2866,10 +2868,10 @@ index 8f2fcb0..d375bfd 100644
        }));
 diff --git a/src/graphics/metal/command_processor.cpp b/src/graphics/metal/command_processor.cpp
 new file mode 100644
-index 0000000..4643448
+index 0000000..c92b09d
 --- /dev/null
 +++ b/src/graphics/metal/command_processor.cpp
-@@ -0,0 +1,1729 @@
+@@ -0,0 +1,1753 @@
 +/**
 + * @file        graphics/metal/command_processor.cpp
 + * @brief       The Xenos command processor on Metal (command_processor.h)
@@ -2900,6 +2902,7 @@ index 0000000..4643448
 +#include <rex/ui/presenter.h>
 +
 +REXCVAR_DECLARE(bool, metal4);
++REXCVAR_DECLARE(bool, gpu_frame_skip);
 +REXCVAR_DECLARE(bool, present_guest_output_aspect);
 +REXCVAR_DECLARE(int32_t, present_guest_output_width);
 +
@@ -3696,6 +3699,15 @@ index 0000000..4643448
 +  vertex_buffers_in_sync_[0] = 0;
 +  vertex_buffers_in_sync_[1] = 0;
 +
++  // gpu_frame_skip: every other frame not drawn (its draws and resolves skipped, the picture of the frame
++  // before kept on screen), the game running at full speed: half the GPU work, a 30 fps picture.
++  if (skipping_frame_) {
++    skipping_frame_ = false;
++    EndFrame();
++    return;
++  }
++  skipping_frame_ = REXCVAR_GET(gpu_frame_skip);
++
 +  ui::Presenter* presenter = graphics_system_ ? graphics_system_->presenter() : nullptr;
 +  if (!presenter) {
 +    EndFrame();
@@ -3795,6 +3807,17 @@ index 0000000..4643448
 +  xenos::EdramMode edram_mode = regs.Get<reg::RB_MODECONTROL>().edram_mode;
 +  if (edram_mode == xenos::EdramMode::kCopy) {
 +    return IssueCopy();
++  }
++  if (skipping_frame_) {
++    // Unless the draw writes memory (memexport), which the game may read.
++    SpirvShader* vertex_shader = static_cast<SpirvShader*>(active_vertex_shader());
++    SpirvShader* pixel_shader = static_cast<SpirvShader*>(active_pixel_shader());
++    if (vertex_shader) pipeline_cache_->AnalyzeShaderUcode(*vertex_shader);
++    if (pixel_shader) pipeline_cache_->AnalyzeShaderUcode(*pixel_shader);
++    if (!(vertex_shader && vertex_shader->memexport_eM_written()) &&
++        !(pixel_shader && pixel_shader->memexport_eM_written())) {
++      return true;
++    }
 +  }
 +  bool surface_pitch_is_zero = regs.Get<reg::RB_SURFACE_INFO>().surface_pitch == 0;
 +
@@ -4082,6 +4105,9 @@ index 0000000..4643448
 +}
 +
 +bool MetalCommandProcessor::IssueCopy() {
++  if (skipping_frame_) {
++    return true;
++  }
 +  BeginFrameIfNeeded();
 +  uint32_t written_address, written_length;
 +  return render_target_cache_->Resolve(*memory_, *shared_memory_, *texture_cache_, written_address,
@@ -12206,10 +12232,10 @@ index 0000000..631333b
 +}  // namespace rex::ui::metal
 diff --git a/src/ui/metal/metal_provider.cpp b/src/ui/metal/metal_provider.cpp
 new file mode 100644
-index 0000000..93101e6
+index 0000000..0733339
 --- /dev/null
 +++ b/src/ui/metal/metal_provider.cpp
-@@ -0,0 +1,74 @@
+@@ -0,0 +1,77 @@
 +/**
 + * @file        ui/metal/metal_provider.cpp
 + * @brief       The Metal device and command queue (provider.h)
@@ -12225,6 +12251,9 @@ index 0000000..93101e6
 +
 +REXCVAR_DEFINE_BOOL(metal4, true, "GPU",
 +                    "Metal GPU backend: Metal 4 command queues where the device and OS support them");
++REXCVAR_DEFINE_BOOL(gpu_frame_skip, false, "GPU",
++                    "Metal GPU backend: draw every other frame only (the game at full speed, a 30 fps "
++                    "picture, half the GPU work)");
 +
 +namespace rex::ui::metal {
 +
