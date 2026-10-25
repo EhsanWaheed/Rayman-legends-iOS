@@ -2868,10 +2868,10 @@ index 8f2fcb0..d375bfd 100644
        }));
 diff --git a/src/graphics/metal/command_processor.cpp b/src/graphics/metal/command_processor.cpp
 new file mode 100644
-index 0000000..c92b09d
+index 0000000..81577dc
 --- /dev/null
 +++ b/src/graphics/metal/command_processor.cpp
-@@ -0,0 +1,1753 @@
+@@ -0,0 +1,1762 @@
 +/**
 + * @file        graphics/metal/command_processor.cpp
 + * @brief       The Xenos command processor on Metal (command_processor.h)
@@ -2883,6 +2883,8 @@ index 0000000..c92b09d
 + * @license     BSD 3-Clause License
 + *              See LICENSE file in the project root for full license text.
 + */
++
++#include <TargetConditionals.h>
 +
 +#include <algorithm>
 +#include <cstdio>
@@ -3934,6 +3936,13 @@ index 0000000..c92b09d
 +  }
 +  const MetalRenderTargetCache::RenderPassKey render_pass_key =
 +      render_target_cache_->last_update_render_pass_key();
++#if TARGET_OS_SIMULATOR
++  // The iOS Simulator's Metal has no rendering without attachments (memexport or occlusion queries only): its
++  // pipeline validation aborts. Devices and Macs have it.
++  if (!render_pass_key.depth_and_color_used) {
++    return true;
++  }
++#endif
 +
 +  bool pipeline_pending;
 +  MTL::RenderPipelineState* pipeline = pipeline_cache_->ConfigurePipeline(
