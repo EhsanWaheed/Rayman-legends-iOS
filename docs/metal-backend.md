@@ -109,3 +109,11 @@ texture loads / resolves in parallel), texture loads straight into textures, mer
   presented; draws that memexport still run. The guest keeps its 60 Hz vblank, so the game runs at full speed with
   a 30 fps picture. Level 1 on the M3: GPU time halved (fragment 2.64 s → 1.26 s per 4.5 s), process CPU time
   -17%. A 15 Pro Max reached "serious" in about 10 minutes at 60 fps with the earlier Low power.
+
+## 0.22
+
+- Low power is back to 60 fps (720p, no MetalFX, the screen's shape). `gpu_frame_skip` is now the overheat
+  safety net (iOS settings: Overheat protection, on by default): on at a critical thermal state, or at serious with
+  the game under 50 fps for 8 s; off below serious, or after 60 s to try 60 again. RL_FAKE_THERMAL tests it.
+- The 15 Pro Max tester held a locked 60 fps for 15 minutes on default settings, reaching "serious" at ~9.5 min.
+- The game renders at 720p at the least (its post-effects need 720 rows); lower isn't possible.

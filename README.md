@@ -9,7 +9,7 @@ settings, the controller support, and a native **Metal 4** GPU backend for the S
 available). No Vulkan or MoltenVK.
 
 **[Download the latest release](https://github.com/EhsanWaheed/Rayman-legends-iOS/releases/latest)**
-(`RaymanLegendsIOS-NGF.ipa`, version 0.21). The IPA contains **no game files**: you add your own copy of the game.
+(`RaymanLegendsIOS-NGF.ipa`, version 0.22). The IPA contains **no game files**: you add your own copy of the game.
 
 Fan project, not affiliated with or endorsed by Ubisoft or Microsoft.
 
@@ -22,8 +22,10 @@ Fan project, not affiliated with or endorsed by Ubisoft or Microsoft.
 - **Widescreen.** The game drawn at the screen's own shape (more of each level, the HUD in its corners), or 16:9
   fitted, filled or stretched.
 - **MetalFX upscaling** from the game's 720p to the screen.
-- **Low power mode** for phones that get hot: every other frame drawn (a 30 fps picture, the game itself at full
-  speed), about half the GPU work, and the 720p picture shown without MetalFX. Still fills the screen.
+- **Low power mode** for phones that get hot: 60 fps with the game's 720p picture shown without MetalFX, filling
+  the screen.
+- **Overheat protection** (on by default): when the phone is critically hot, or hot and dropping frames, a steady
+  30 fps picture (every other frame drawn, half the GPU work, the game at full speed) until it cools.
 - **Controllers.** Backbone One (PlayStation Edition too), DualSense, DualShock 4, Xbox and other MFi
   controllers, hot-plugged. The game shows PlayStation button prompts everywhere, and the pause menu's **Help**
   screen shows a Backbone One, or a DualSense when one is connected.

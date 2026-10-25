@@ -78,6 +78,8 @@ void round_corners(UIVisualEffectView *v, CGFloat radius) {
 
 // ---- the game's frames (GPU emulation thread) ----------------------------------------------------------------
 
+void govern_frame_skip(double game_fps);
+
 struct FrameStats {
     double fps = 0;        // frames shown in the last second (presented to the display, as the Metal HUD counts)
     double game_fps = 0;   // frames the game made in it
@@ -130,6 +132,7 @@ void on_guest_frame() {
         g_window_presented = presented;
         g_stats.average_ms = g_window_frames ? window_ms / g_window_frames : 0;
         g_stats.worst_ms = g_window_worst;
+        govern_frame_skip(g_stats.game_fps);
         // Every 5 s into the log (Documents/Logs), for comparing builds on the phone.
         static uint32_t seconds = 0;
         if (++seconds % 5 == 0) {
@@ -223,11 +226,45 @@ bool sustained() { return [defaults() boolForKey:@"ios.sustained"]; }
 // tied to its frame rate.)
 bool low_power() { return [defaults() boolForKey:@"ios.lowPower"]; }
 
-// Low power: MetalFX off, and every other frame drawn (the game at full speed, a 30 fps picture, half the GPU
-// work).
-void apply_metalfx() {
-    REXCVAR_SET(present_metalfx, [defaults() boolForKey:@"ios.metalfx"] && !low_power());
-    REXCVAR_SET(gpu_frame_skip, low_power());
+void apply_metalfx() { REXCVAR_SET(present_metalfx, [defaults() boolForKey:@"ios.metalfx"] && !low_power()); }
+
+// The overheating safety net: every other frame drawn (the game itself at full speed, a 30 fps picture, half the
+// GPU work) while the phone is critically hot, or hot and not keeping 60 for 8 s; back to 60 once it has cooled
+// below serious, or after a minute to try again. Called each second with the game's frame rate.
+void govern_frame_skip(double game_fps) {
+    static bool skipping = false;
+    static int slow_seconds = 0, skipping_seconds = 0;
+    // Testing: RL_FAKE_THERMAL=<0-3> stands in for the device's thermal state.
+    static const char *fake_thermal = getenv("RL_FAKE_THERMAL");
+    const NSProcessInfoThermalState thermal =
+        fake_thermal ? NSProcessInfoThermalState(atoi(fake_thermal)) : NSProcessInfo.processInfo.thermalState;
+    static const bool registered = [] {
+        [defaults() registerDefaults:@{@"ios.overheat" : @YES}];
+        return true;
+    }();
+    (void)registered;
+    if (![defaults() boolForKey:@"ios.overheat"]) {
+        if (skipping) {
+            skipping = false;
+            REXCVAR_SET(gpu_frame_skip, false);
+        }
+        slow_seconds = 0;
+        return;
+    }
+    if (!skipping) {
+        slow_seconds = thermal >= NSProcessInfoThermalStateSerious && game_fps < 50 ? slow_seconds + 1 : 0;
+        if (thermal >= NSProcessInfoThermalStateCritical || slow_seconds >= 8) {
+            skipping = true;
+            skipping_seconds = 0;
+            REXLOG_INFO("Overheating: drawing every other frame (thermal {}, {:.0f} fps)", int(thermal), game_fps);
+        }
+    } else if (thermal < NSProcessInfoThermalStateSerious ||
+               (++skipping_seconds >= 60 && thermal < NSProcessInfoThermalStateCritical)) {
+        skipping = false;
+        slow_seconds = 0;
+        REXLOG_INFO("Overheating over: drawing every frame again (thermal {})", int(thermal));
+    }
+    REXCVAR_SET(gpu_frame_skip, skipping);
 }
 
 int sustained_rows() {
@@ -439,6 +476,7 @@ NSString *thermal_text(NSProcessInfoThermalState s) {
 @property(nonatomic) UISegmentedControl *gameRows;
 @property(nonatomic) UISwitch *sustainedSwitch;
 @property(nonatomic) UISwitch *lowPowerSwitch;
+@property(nonatomic) UISwitch *overheatSwitch;
 @property(nonatomic) UISwitch *wideSwitch;
 @property(nonatomic) UILabel *gameRowsNote;
 @property(nonatomic) UISegmentedControl *renderer;
@@ -462,7 +500,7 @@ NSString *thermal_text(NSProcessInfoThermalState s) {
     [defaults() registerDefaults:@{@"ios.showFps" : @NO, @"ios.outputRows" : @0, @"ios.metalfx" : @YES, @"ios.picture" : @1,
                                    @"ios.gameRows" : @720, @"ios.sustained" : @NO,
                                    @"ios.widescreen" : @YES, @"ios.renderer" : kDefaultRenderer,
-                                   @"ios.lowPower" : @NO}];
+                                   @"ios.lowPower" : @NO, @"ios.overheat" : @YES}];
     apply_picture_fit((int)[defaults() integerForKey:@"ios.picture"]);
     apply_output_rows(window);
     apply_metalfx();
@@ -660,6 +698,10 @@ NSString *thermal_text(NSProcessInfoThermalState s) {
     self.lowPowerSwitch.on = low_power();
     self.lowPowerSwitch.onTintColor = UIColor.systemOrangeColor;
     [self.lowPowerSwitch addTarget:self action:@selector(lowPowerChanged:) forControlEvents:UIControlEventValueChanged];
+    self.overheatSwitch = [UISwitch new];
+    self.overheatSwitch.on = [defaults() boolForKey:@"ios.overheat"];
+    self.overheatSwitch.onTintColor = UIColor.systemOrangeColor;
+    [self.overheatSwitch addTarget:self action:@selector(overheatChanged:) forControlEvents:UIControlEventValueChanged];
     [self refreshPowerControls];
     self.renderer = [[UISegmentedControl alloc] initWithItems:kRendererNames];
     self.renderer.selectedSegmentIndex = chosen_renderer();
@@ -692,10 +734,14 @@ NSString *thermal_text(NSProcessInfoThermalState s) {
           control:self.renderer],
         self.rendererNote,
         [self row:@"Low power"
-             note:@"About half the GPU work and less heat: every other frame drawn (a 30 fps picture, the game "
-                  @"itself at full speed), the 720p picture stretched to the screen without MetalFX. For phones "
-                  @"that get hot (no vapor chamber, titanium); the picture is softer and less smooth."
+             note:@"Less GPU work and heat at 60 fps: the game's 720p picture stretched to the screen, no "
+                  @"MetalFX. For phones that get hot (no vapor chamber, titanium); the picture is softer."
           control:self.lowPowerSwitch],
+        [self row:@"Overheat protection"
+             note:@"When the phone is critically hot, or hot and dropping frames, a steady 30 fps picture (every "
+                  @"other frame drawn, half the GPU work, the game at full speed) until it cools, instead of "
+                  @"uneven drops. Off: always every frame."
+          control:self.overheatSwitch],
         [self row:@"Sustained performance"
              note:UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad
                       ? @"MetalFX upscaling steps down by temperature: to the screen, 1440p when hot, 1080p "
@@ -753,6 +799,10 @@ NSString *thermal_text(NSProcessInfoThermalState s) {
     self.sustainedSwitch.enabled = !low_power();
     self.outputRows.enabled = !low_power() && !sustained();
     self.upscaler.enabled = !low_power();
+}
+
+- (void)overheatChanged:(UISwitch *)s {
+    [defaults() setBool:s.on forKey:@"ios.overheat"];
 }
 
 - (void)lowPowerChanged:(UISwitch *)s {
