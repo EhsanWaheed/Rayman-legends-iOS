@@ -239,7 +239,7 @@ void govern_frame_skip(double game_fps) {
     const NSProcessInfoThermalState thermal =
         fake_thermal ? NSProcessInfoThermalState(atoi(fake_thermal)) : NSProcessInfo.processInfo.thermalState;
     static const bool registered = [] {
-        [defaults() registerDefaults:@{@"ios.overheat" : @YES}];
+        [defaults() registerDefaults:@{@"ios.overheat" : @NO}];
         return true;
     }();
     (void)registered;
@@ -500,7 +500,7 @@ NSString *thermal_text(NSProcessInfoThermalState s) {
     [defaults() registerDefaults:@{@"ios.showFps" : @NO, @"ios.outputRows" : @0, @"ios.metalfx" : @YES, @"ios.picture" : @1,
                                    @"ios.gameRows" : @720, @"ios.sustained" : @NO,
                                    @"ios.widescreen" : @YES, @"ios.renderer" : kDefaultRenderer,
-                                   @"ios.lowPower" : @NO, @"ios.overheat" : @YES}];
+                                   @"ios.lowPower" : @NO, @"ios.overheat" : @NO}];
     apply_picture_fit((int)[defaults() integerForKey:@"ios.picture"]);
     apply_output_rows(window);
     apply_metalfx();
@@ -740,7 +740,7 @@ NSString *thermal_text(NSProcessInfoThermalState s) {
         [self row:@"Overheat protection"
              note:@"When the phone is critically hot, or hot and dropping frames, a steady 30 fps picture (every "
                   @"other frame drawn, half the GPU work, the game at full speed) until it cools, instead of "
-                  @"uneven drops. Off: always every frame."
+                  @"uneven drops. Off (the default): always every frame."
           control:self.overheatSwitch],
         [self row:@"Sustained performance"
              note:UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad
