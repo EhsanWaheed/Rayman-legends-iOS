@@ -117,3 +117,31 @@ texture loads / resolves in parallel), texture loads straight into textures, mer
   the game under 50 fps for 8 s; off below serious, or after 60 s to try 60 again. RL_FAKE_THERMAL tests it.
 - The 15 Pro Max tester held a locked 60 fps for 15 minutes on default settings, reaching "serious" at ~9.5 min.
 - The game renders at 720p at the least (its post-effects need 720 rows); lower isn't possible.
+
+## 0.23
+
+- Overheat protection off by default.
+
+## 0.24
+
+- **Autorelease pool on the command processor thread.** Metal returns encoders, command buffers, descriptors and
+  strings autoreleased, and the GPU Commands thread never drained a pool: every encoder of the session stayed
+  allocated (about 56 render and 36 compute encoders a frame, `AGXG15GFamilyRenderContext_mtlnext` 224 bytes and
+  `...ComputeContext_mtlnext` 160 bytes each, plus their storage). Malloc grew ~1.2 MB/s; a 15 Pro Max under Helix
+  (no increased memory limit, ~3.2 GB available) was ended by the system after ~46 minutes at 60 fps. The pool is
+  now drained after every primary buffer (`OnPrimaryBufferEnd`); encoders are retained while open, since a pass can
+  stay open across buffers. Level 1 on the Mac after 5 minutes: footprint 1280 MB (was 1565 MB at 4.5 min and
+  climbing), malloc 195 MB (was over 600 MB), growth ~0.1 MB/s (was ~1.25 MB/s).
+- **EVENT_WRITE_SHD fences held until their GPU work completes** (`WriteGpuEvent` / `ProcessHeldGpuEvents`). The
+  GPU reads guest memory in place, and the fences were written when the command processor reached them, ahead of
+  the host GPU, so the game rebuilt dynamic vertex buffers the GPU was still reading (the cake Murfy eats in Fiesta
+  de los Muertos flickered and tore). Interrupts stay immediate: holding them too took level 1 to ~41 fps.
+- **The game's GPU wait backs off** (`spin_waits.cpp`): 20 us sleeps for the first 16 checks, then 100 us, then
+  200 us (waits now last as long as the host GPU's). Level 1: context switches 50k/s → 24k/s, idle wakeups
+  ~120/s → ~40/s, process CPU 38.5% → 35% of a core, 60 fps either way.
+- Tried and dropped: a condition-variable wait for the timer queue in place of disruptorplus's spin/yield: no
+  measurable change (CPU 35% both, context switches the same).
+- iOS settings: one **Picture quality** choice (Low power / Balanced / Sharp) replaces Low power, Sustained
+  performance, Output resolution and Upscaler; the game always renders its 720p (Game resolution removed). Balanced,
+  the default, is MetalFX to the screen stepping down with the thermal state (1080p at serious, stretched at
+  critical). `[perf]` log lines include the memory footprint and what the system still allows.

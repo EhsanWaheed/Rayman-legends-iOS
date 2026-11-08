@@ -11,6 +11,8 @@
 
 #import <GameController/GameController.h>
 #import <UIKit/UIKit.h>
+#include <os/proc.h>
+#include <mach/mach.h>
 
 #include <SDL3/SDL.h>
 #include <mach/mach_time.h>
@@ -136,10 +138,18 @@ void on_guest_frame() {
         // Every 5 s into the log (Documents/Logs), for comparing builds on the phone.
         static uint32_t seconds = 0;
         if (++seconds % 5 == 0) {
+            // Memory too: iOS ends a game using too much without a word in its own log.
+            task_vm_info_data_t vm_info = {};
+            mach_msg_type_number_t vm_count = TASK_VM_INFO_COUNT;
+            const uint64_t footprint =
+                task_info(mach_task_self(), TASK_VM_INFO, task_info_t(&vm_info), &vm_count) == KERN_SUCCESS
+                    ? vm_info.phys_footprint
+                    : 0;
             REXLOG_INFO("[perf] {:.1f} fps shown ({:.1f} by the game), frame {:.1f} ms avg, {:.1f} ms worst, "
-                        "thermal {}",
+                        "thermal {}, memory {} MB ({} MB more allowed)",
                         g_stats.fps, g_stats.game_fps, g_stats.average_ms, g_stats.worst_ms,
-                        int(NSProcessInfo.processInfo.thermalState));
+                        int(NSProcessInfo.processInfo.thermalState), footprint >> 20,
+                        uint64_t(os_proc_available_memory()) >> 20);
         }
         g_window_start = now;
         g_window_frames = 0;
@@ -173,11 +183,6 @@ void set_paused(bool *reason, bool paused) {
     }
     g_frames_resume.notify_all();
 }
-
-// The output resolution: the height MetalFX upscales the game's picture to (a bilinear stretch does the rest, to the
-// screen's own resolution). 0: the screen's own.
-const int kOutputSteps[] = {720, 900, 1080, 0};
-constexpr int kOutputStepCount = sizeof(kOutputSteps) / sizeof(kOutputSteps[0]);
 
 // How the 16:9 picture meets the screen: 0 Fit (bars at the sides), 1 Zoom (at most 3% cut off the top and bottom:
 // the game's own text at the edges stays whole, slim bars at the sides), 2 Fill (the whole screen, up to 10% of the
@@ -215,18 +220,31 @@ void apply_picture_fit(int fit) {
     REXCVAR_SET(present_safe_area_y, safe);
 }
 
-// Sustained performance mode: how far MetalFX upscales the game's picture steps down with the device's
-// temperature instead of the chosen output resolution: to the screen's own, 1080p when hot (serious), none when
-// very hot (critical: the 720p picture stretched). iPad: the screen's, 1440p, 1080p. (The game itself renders at
-// 720p at the least: its resolution is fixed at launch.)
-bool sustained() { return [defaults() boolForKey:@"ios.sustained"]; }
+// Picture quality: how the game's 720p picture is scaled to the screen, one choice in place of the old Low power,
+// Sustained performance, Output resolution and Upscaler settings (and Game resolution: always the game's 720p).
+//   Low power  no MetalFX, the 720p picture stretched to the screen: the least GPU work and heat
+//   Balanced   MetalFX to the screen, stepping down with the temperature (the default)
+//   Sharp      MetalFX to the screen's full resolution, always
+enum Quality { kLowPower = 0, kBalanced = 1, kSharp = 2 };
+NSArray<NSString *> *const kQualityNames = @[ @"Low power", @"Balanced", @"Sharp" ];
 
-// Low power: no upscaling past the game's own 720p and no MetalFX (a plain stretch to the screen), the least
-// GPU work per frame, for phones without a vapor chamber or when warm. (The game can't run at 30: its logic is
-// tied to its frame rate.)
-bool low_power() { return [defaults() boolForKey:@"ios.lowPower"]; }
+int quality() {
+    static const bool migrated = [] {
+        // The settings this replaces: Low power kept, the rest (all but Sustained performance meant MetalFX to the
+        // screen) to Balanced.
+        NSUserDefaults *d = defaults();
+        if (![d objectForKey:@"ios.quality"] && [d boolForKey:@"ios.lowPower"])
+            [d setInteger:kLowPower forKey:@"ios.quality"];
+        for (NSString *old in @[ @"ios.lowPower", @"ios.sustained", @"ios.outputRows", @"ios.metalfx", @"ios.gameRows" ])
+            [d removeObjectForKey:old];
+        [d registerDefaults:@{@"ios.quality" : @(kBalanced)}];
+        return true;
+    }();
+    (void)migrated;
+    return std::clamp(int([defaults() integerForKey:@"ios.quality"]), int(kLowPower), int(kSharp));
+}
 
-void apply_metalfx() { REXCVAR_SET(present_metalfx, [defaults() boolForKey:@"ios.metalfx"] && !low_power()); }
+void apply_metalfx() { REXCVAR_SET(present_metalfx, quality() != kLowPower); }
 
 // The overheating safety net: every other frame drawn (the game itself at full speed, a 30 fps picture, half the
 // GPU work) while the phone is critically hot, or hot and not keeping 60 for 8 s; back to 60 once it has cooled
@@ -267,24 +285,21 @@ void govern_frame_skip(double game_fps) {
     REXCVAR_SET(gpu_frame_skip, skipping);
 }
 
-int sustained_rows() {
+// How far MetalFX takes the 720p picture (a bilinear stretch does the rest; 0: the screen's own height). Balanced
+// steps down with the temperature: to the screen, 1080p when hot (serious), none when very hot (critical: the
+// picture stretched). iPad: the screen, 1440p, 1080p.
+int output_rows() {
     const bool pad = UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad;
-    const int steps[3] = {0, pad ? 1440 : 1080, pad ? 1080 : 720};
+    switch (quality()) {
+    case kLowPower: return 720;
+    case kSharp: return 0;
+    }
     switch (NSProcessInfo.processInfo.thermalState) {
-    case NSProcessInfoThermalStateSerious: return steps[1];
-    case NSProcessInfoThermalStateCritical: return steps[2];
-    default: return steps[0];
+    case NSProcessInfoThermalStateSerious: return pad ? 1440 : 1080;
+    case NSProcessInfoThermalStateCritical: return pad ? 1080 : 720;
+    default: return 0;
     }
 }
-
-int output_rows() {
-    if (low_power())
-        return 720;
-    return sustained() ? sustained_rows() : (int)[defaults() integerForKey:@"ios.outputRows"];
-}
-
-// The height the game renders at, chosen at launch (rl_ios_game_rows): what the upscaler starts from.
-int g_game_rows = 1080;
 
 // SDL's Metal view in the game's window (its layer is the CAMetalLayer the game presents to).
 UIView *metal_view(UIView *v) {
@@ -469,18 +484,9 @@ NSString *thermal_text(NSProcessInfoThermalState s) {
 @property(nonatomic) UIScrollView *scroll;
 @property(nonatomic) UIStackView *performance;
 @property(nonatomic) UIStackView *display;
-@property(nonatomic) UISegmentedControl *outputRows;
-@property(nonatomic) UISegmentedControl *upscaler;
-@property(nonatomic) UISegmentedControl *fit;
-@property(nonatomic) UILabel *upscalerNote;
-@property(nonatomic) UISegmentedControl *gameRows;
-@property(nonatomic) UISwitch *sustainedSwitch;
-@property(nonatomic) UISwitch *lowPowerSwitch;
-@property(nonatomic) UISwitch *overheatSwitch;
-@property(nonatomic) UISwitch *wideSwitch;
-@property(nonatomic) UILabel *gameRowsNote;
-@property(nonatomic) UISegmentedControl *renderer;
-@property(nonatomic) UILabel *rendererNote;
+@property(nonatomic) UISegmentedControl *fit, *quality, *renderer;
+@property(nonatomic) UISwitch *wideSwitch, *overheatSwitch;
+@property(nonatomic) UILabel *wideNote, *fitNote, *qualityNote, *rendererNote;
 @property(nonatomic) UIStackView *controller;
 @property(nonatomic) UILabel *fpsValue, *frameValue, *worstValue, *thermalValue;
 @property(nonatomic) UISwitch *pillSwitch;
@@ -497,10 +503,8 @@ NSString *thermal_text(NSProcessInfoThermalState s) {
     if (!(self = [super init]))
         return nil;
     _window = window;
-    [defaults() registerDefaults:@{@"ios.showFps" : @NO, @"ios.outputRows" : @0, @"ios.metalfx" : @YES, @"ios.picture" : @1,
-                                   @"ios.gameRows" : @720, @"ios.sustained" : @NO,
-                                   @"ios.widescreen" : @YES, @"ios.renderer" : kDefaultRenderer,
-                                   @"ios.lowPower" : @NO, @"ios.overheat" : @NO}];
+    [defaults() registerDefaults:@{@"ios.showFps" : @NO, @"ios.picture" : @1, @"ios.widescreen" : @YES,
+                                   @"ios.renderer" : kDefaultRenderer, @"ios.overheat" : @NO}];
     apply_picture_fit((int)[defaults() integerForKey:@"ios.picture"]);
     apply_output_rows(window);
     apply_metalfx();
@@ -667,190 +671,141 @@ NSString *thermal_text(NSProcessInfoThermalState s) {
     self.root = root;
 }
 
+- (UISwitch *)toggle:(BOOL)on action:(SEL)action {
+    UISwitch *s = [UISwitch new];
+    s.on = on;
+    s.onTintColor = UIColor.systemOrangeColor;
+    [s addTarget:self action:action forControlEvents:UIControlEventValueChanged];
+    return s;
+}
+
+- (UISegmentedControl *)choice:(NSArray<NSString *> *)items selected:(NSInteger)selected action:(SEL)action {
+    UISegmentedControl *s = [[UISegmentedControl alloc] initWithItems:items];
+    s.selectedSegmentIndex = selected;
+    [s addTarget:self action:action forControlEvents:UIControlEventValueChanged];
+    return s;
+}
+
+// A title and a control, the note below them across the panel's width (it says what the current choice does).
+- (UIView *)row:(NSString *)title control:(UIView *)control note:(UILabel *)note {
+    UIStackView *s = [[UIStackView alloc] initWithArrangedSubviews:@[ [self row:title note:nil control:control], note ]];
+    s.axis = UILayoutConstraintAxisVertical;
+    s.spacing = 4;
+    return s;
+}
+
 - (void)buildDisplay {
-    NSMutableArray<NSString *> *titles = [NSMutableArray array];
-    NSInteger selected = kOutputStepCount - 1;
-    for (int i = 0; i < kOutputStepCount; ++i) {
-        [titles addObject:kOutputSteps[i] ? [NSString stringWithFormat:@"%dp", kOutputSteps[i]] : @"Screen"];
-        if (kOutputSteps[i] == [defaults() integerForKey:@"ios.outputRows"])
-            selected = i;
-    }
-    self.outputRows = [[UISegmentedControl alloc] initWithItems:titles];
-    self.outputRows.selectedSegmentIndex = selected;
-    [self.outputRows addTarget:self action:@selector(outputRowsChanged:) forControlEvents:UIControlEventValueChanged];
-    self.upscaler = [[UISegmentedControl alloc] initWithItems:@[ @"MetalFX", @"Bilinear" ]];
-    self.upscaler.selectedSegmentIndex = [defaults() boolForKey:@"ios.metalfx"] ? 0 : 1;
-    [self.upscaler addTarget:self action:@selector(upscalerChanged:) forControlEvents:UIControlEventValueChanged];
-    self.upscalerNote = [self note:@""];
-    self.gameRows = [[UISegmentedControl alloc] initWithItems:@[ @"720p", @"1080p" ]];
-    self.gameRows.selectedSegmentIndex = [defaults() integerForKey:@"ios.gameRows"] == 1080 ? 1 : 0;
-    [self.gameRows addTarget:self action:@selector(gameRowsChanged:) forControlEvents:UIControlEventValueChanged];
-    self.gameRowsNote = [self note:@""];
-    self.wideSwitch = [UISwitch new];
-    self.wideSwitch.on = [defaults() boolForKey:@"ios.widescreen"];
-    self.wideSwitch.onTintColor = UIColor.systemOrangeColor;
-    [self.wideSwitch addTarget:self action:@selector(wideChanged:) forControlEvents:UIControlEventValueChanged];
-    self.sustainedSwitch = [UISwitch new];
-    self.sustainedSwitch.on = sustained();
-    self.sustainedSwitch.onTintColor = UIColor.systemOrangeColor;
-    [self.sustainedSwitch addTarget:self action:@selector(sustainedChanged:) forControlEvents:UIControlEventValueChanged];
-    self.lowPowerSwitch = [UISwitch new];
-    self.lowPowerSwitch.on = low_power();
-    self.lowPowerSwitch.onTintColor = UIColor.systemOrangeColor;
-    [self.lowPowerSwitch addTarget:self action:@selector(lowPowerChanged:) forControlEvents:UIControlEventValueChanged];
-    self.overheatSwitch = [UISwitch new];
-    self.overheatSwitch.on = [defaults() boolForKey:@"ios.overheat"];
-    self.overheatSwitch.onTintColor = UIColor.systemOrangeColor;
-    [self.overheatSwitch addTarget:self action:@selector(overheatChanged:) forControlEvents:UIControlEventValueChanged];
-    [self refreshPowerControls];
-    self.renderer = [[UISegmentedControl alloc] initWithItems:kRendererNames];
-    self.renderer.selectedSegmentIndex = chosen_renderer();
-    [self.renderer addTarget:self action:@selector(rendererChanged:) forControlEvents:UIControlEventValueChanged];
+    self.wideSwitch = [self toggle:[defaults() boolForKey:@"ios.widescreen"] action:@selector(wideChanged:)];
+    self.fit = [self choice:@[ @"Fit", @"Zoom", @"Fill", @"Stretch" ]
+                   selected:[defaults() integerForKey:@"ios.picture"]
+                     action:@selector(fitChanged:)];
+    self.quality = [self choice:kQualityNames selected:quality() action:@selector(qualityChanged:)];
+    self.overheatSwitch = [self toggle:[defaults() boolForKey:@"ios.overheat"] action:@selector(overheatChanged:)];
+    self.renderer = [self choice:kRendererNames selected:chosen_renderer() action:@selector(rendererChanged:)];
+    self.wideNote = [self note:@""];
+    self.fitNote = [self note:@""];
+    self.qualityNote = [self note:@""];
     self.rendererNote = [self note:@""];
-    self.fit = [[UISegmentedControl alloc] initWithItems:@[ @"Fit", @"Zoom", @"Fill", @"Stretch" ]];
-    self.fit.selectedSegmentIndex = [defaults() integerForKey:@"ios.picture"];
-    [self.fit addTarget:self action:@selector(fitChanged:) forControlEvents:UIControlEventValueChanged];
     self.display = [self column:@[
         [self section:@"Picture"],
-        [self row:@"Native widescreen"
-             note:@"The game drawn at the display's own shape, its menus and HUD laid out to the edges: more of "
-                  @"each level at the sides (above and below on iPad), the whole screen, nothing stretched or cut "
-                  @"off. Uses the game's 720p mode. From the next launch of the game."
-          control:self.wideSwitch],
-        [self row:@"Screen"
-             note:@"Fit: the whole picture, bars at the sides. Zoom: nearly the whole display, the game's text "
-                  @"kept whole. Fill: the whole display, the top and bottom edges (level names, button prompts) cut "
-                  @"off. Stretch: the whole display, widened."
-          control:self.fit],
-        [self row:@"Game resolution"
-             note:@"The resolution the game itself renders at (both are the game's own modes). 720p draws "
-                  @"less than half the pixels of 1080p: far less GPU work and heat, with MetalFX upscaling it "
-                  @"to the screen."
-          control:self.gameRows],
-        self.gameRowsNote,
-        [self row:@"Renderer"
-             note:@"Metal 4: the newest Metal (less CPU work; iOS 26 and an A14 or later, Metal 3 otherwise). "
-                  @"Metal 3: for comparison, or if Metal 4 misbehaves. From the next launch of the game."
-          control:self.renderer],
-        self.rendererNote,
-        [self row:@"Low power"
-             note:@"Less GPU work and heat at 60 fps: the game's 720p picture stretched to the screen, no "
-                  @"MetalFX. For phones that get hot (no vapor chamber, titanium); the picture is softer."
-          control:self.lowPowerSwitch],
+        [self row:@"Widescreen" control:self.wideSwitch note:self.wideNote],
+        [self row:@"Screen" control:self.fit note:self.fitNote],
+        [self row:@"Picture quality" control:self.quality note:self.qualityNote],
         [self row:@"Overheat protection"
-             note:@"When the phone is critically hot, or hot and dropping frames, a steady 30 fps picture (every "
-                  @"other frame drawn, half the GPU work, the game at full speed) until it cools, instead of "
-                  @"uneven drops. Off (the default): always every frame."
+             note:@"When the phone gets too hot, a steady 30 fps until it cools, instead of uneven drops."
           control:self.overheatSwitch],
-        [self row:@"Sustained performance"
-             note:UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad
-                      ? @"MetalFX upscaling steps down by temperature: to the screen, 1440p when hot, 1080p "
-                        @"when very hot."
-                      : @"MetalFX upscaling steps down by temperature: to the screen, 1080p when hot, off (the "
-                        @"720p picture stretched) when very hot."
-          control:self.sustainedSwitch],
-        [self row:@"Output resolution"
-             note:@"How far the upscaler takes the game's picture; a plain stretch does the rest. Lower is "
-                  @"less GPU work; Screen upscales all the way to the display's resolution."
-          control:self.outputRows],
-        [self row:@"Upscaler"
-             note:@"How the game's picture is scaled up to the output: MetalFX (sharper) or bilinear."
-          control:self.upscaler],
-        self.upscalerNote,
+        [self section:@"Advanced"],
+        [self row:@"Renderer" control:self.renderer note:self.rendererNote],
     ]];
-    [self refreshUpscalerNote];
+    [self refreshNotes];
 }
 
-- (void)refreshUpscalerNote {
-    const int rows = output_rows();
-    UIScreen *screen = self.window.windowScene.screen ?: UIScreen.mainScreen;
-    const int screen_rows = (int)std::min(screen.nativeBounds.size.width, screen.nativeBounds.size.height);
-    const int out = rows > 0 ? std::min(rows, screen_rows) : screen_rows;
-    if (!rex::ui::IsMetalFxUpscalingSupported())
-        self.upscalerNote.text = @"MetalFX is not available on this device.";
-    else if (out <= g_game_rows)
-        self.upscalerNote.text = [NSString stringWithFormat:@"At %dp output there is nothing to upscale.", out];
-    else
-        self.upscalerNote.text = [NSString stringWithFormat:@"Now: %dp to %dp with %@.", g_game_rows, out,
-                                                           REXCVAR_GET(present_metalfx) ? @"MetalFX" : @"bilinear"];
+// The notes under the choices: what the current one does.
+- (void)refreshNotes {
+    const bool wide_chosen = [defaults() boolForKey:@"ios.widescreen"];
+    NSString *wide = wide_chosen ? @"The game drawn at the screen's own shape: more of each level, its HUD at the edges."
+                                 : @"The game's own 16:9 picture.";
+    if (wide_chosen != g_widescreen)
+        wide = [wide stringByAppendingString:@" From the next launch of the game."];
+    self.wideNote.text = wide;
+
+    NSArray<NSString *> *fits =
+        g_widescreen ? @[
+            @"The whole picture, thin bars where its shape and the screen's differ.",
+            @"The whole picture, thin bars where its shape and the screen's differ.",
+            @"The whole screen; a little of the top and bottom cut off.",
+            @"The whole screen, the picture widened a little."
+        ]
+                     : @[
+                           @"The whole picture, bars at the sides.",
+                           @"Nearly the whole screen, the game's text kept whole.",
+                           @"The whole screen; the top and bottom edges (level names, prompts) cut off.",
+                           @"The whole screen, the picture widened."
+                       ];
+    self.fitNote.text = fits[std::clamp(int(self.fit.selectedSegmentIndex), 0, 3)];
+
+    const bool metalfx = rex::ui::IsMetalFxUpscalingSupported();
+    switch (quality()) {
+    case kLowPower:
+        self.qualityNote.text = @"The least GPU work and heat: the game's 720p picture stretched to the screen, softer.";
+        break;
+    case kBalanced:
+        self.qualityNote.text = metalfx ? [NSString stringWithFormat:@"MetalFX sharpens the picture to the screen, less "
+                                                                     @"when the phone is hot. Now: %@.",
+                                                                     output_rows() == 720 ? @"stretched"
+                                                                     : output_rows()      ? [NSString stringWithFormat:@"to %dp", output_rows()]
+                                                                                          : @"to the screen"]
+                                        : @"Upscaled to the screen (MetalFX isn't available on this device).";
+        break;
+    default:
+        self.qualityNote.text = metalfx ? @"MetalFX sharpens the picture to the screen's full resolution, always."
+                                        : @"Upscaled to the screen (MetalFX isn't available on this device).";
+    }
+
     const int renderer_chosen = chosen_renderer();
-    self.rendererNote.text = renderer_chosen == g_renderer
-                                 ? [NSString stringWithFormat:@"Now running on %@.", kRendererNames[g_renderer]]
-                                 : [NSString stringWithFormat:@"Now %@; %@ from the next launch of the game.",
-                                                              kRendererNames[g_renderer],
-                                                              kRendererNames[renderer_chosen]];
-    const int chosen = (int)[defaults() integerForKey:@"ios.gameRows"] == 1080 ? 1080 : 720;
-    self.gameRowsNote.text = chosen == g_game_rows
-                                 ? [NSString stringWithFormat:@"Now rendering at %dp.", g_game_rows]
-                                 : [NSString stringWithFormat:@"Now %dp; %dp from the next launch of the game.",
-                                                              g_game_rows, chosen];
-}
-
-- (void)rendererChanged:(UISegmentedControl *)s {
-    [defaults() setObject:kRenderers[s.selectedSegmentIndex] forKey:@"ios.renderer"];
-    [self refreshUpscalerNote];
+    NSString *renderer = renderer_chosen == 0 ? @"The newest Metal, the least CPU work (iOS 26 and an A14 or later)."
+                                              : @"For comparison, or if something looks wrong with Metal 4.";
+    if (renderer_chosen != g_renderer)
+        renderer = [renderer stringByAppendingFormat:@" From the next launch (now %@).", kRendererNames[g_renderer]];
+    self.rendererNote.text = renderer;
 }
 
 - (void)wideChanged:(UISwitch *)s {
     [defaults() setBool:s.on forKey:@"ios.widescreen"];
+    [self refreshNotes];
 }
 
-- (void)refreshPowerControls {
-    self.sustainedSwitch.enabled = !low_power();
-    self.outputRows.enabled = !low_power() && !sustained();
-    self.upscaler.enabled = !low_power();
+- (void)fitChanged:(UISegmentedControl *)s {
+    [defaults() setInteger:s.selectedSegmentIndex forKey:@"ios.picture"];
+    apply_picture_fit((int)s.selectedSegmentIndex);
+    [self refreshNotes];
+}
+
+- (void)qualityChanged:(UISegmentedControl *)s {
+    [defaults() setInteger:s.selectedSegmentIndex forKey:@"ios.quality"];
+    apply_metalfx();
+    apply_output_rows(self.window);
+    [self refreshNotes];
 }
 
 - (void)overheatChanged:(UISwitch *)s {
     [defaults() setBool:s.on forKey:@"ios.overheat"];
 }
 
-- (void)lowPowerChanged:(UISwitch *)s {
-    [defaults() setBool:s.on forKey:@"ios.lowPower"];
-    apply_metalfx();
-    apply_output_rows(self.window);
-    [self refreshPowerControls];
-    [self refreshUpscalerNote];
-}
-
-- (void)sustainedChanged:(UISwitch *)s {
-    [defaults() setBool:s.on forKey:@"ios.sustained"];
-    [self refreshPowerControls];
-    apply_output_rows(self.window);
-    [self refreshUpscalerNote];
+- (void)rendererChanged:(UISegmentedControl *)s {
+    [defaults() setObject:kRenderers[s.selectedSegmentIndex] forKey:@"ios.renderer"];
+    [self refreshNotes];
 }
 
 - (void)thermalChanged:(NSNotification *)note {
     dispatch_async(dispatch_get_main_queue(), ^{
-      if (!sustained())
+      if (quality() != kBalanced)
           return;
-      REXLOG_INFO("Sustained performance: thermal state {}, output {}p",
-                  int(NSProcessInfo.processInfo.thermalState), sustained_rows());
+      REXLOG_INFO("Balanced quality: thermal state {}, MetalFX to {}p",
+                  int(NSProcessInfo.processInfo.thermalState), output_rows());
       apply_output_rows(self.window);
-      [self refreshUpscalerNote];
+      [self refreshNotes];
     });
-}
-
-- (void)gameRowsChanged:(UISegmentedControl *)s {
-    [defaults() setInteger:s.selectedSegmentIndex == 1 ? 1080 : 720 forKey:@"ios.gameRows"];
-    [self refreshUpscalerNote];
-}
-
-- (void)fitChanged:(UISegmentedControl *)s {
-    [defaults() setInteger:s.selectedSegmentIndex forKey:@"ios.picture"];
-    apply_picture_fit((int)s.selectedSegmentIndex);
-}
-
-- (void)upscalerChanged:(UISegmentedControl *)s {
-    [defaults() setBool:s.selectedSegmentIndex == 0 forKey:@"ios.metalfx"];
-    apply_metalfx();
-    [self refreshUpscalerNote];
-}
-
-- (void)outputRowsChanged:(UISegmentedControl *)s {
-    [defaults() setInteger:kOutputSteps[s.selectedSegmentIndex] forKey:@"ios.outputRows"];
-    apply_output_rows(self.window);
-    [self refreshUpscalerNote];
 }
 
 - (void)buildPerformance {
@@ -873,10 +828,8 @@ NSString *thermal_text(NSProcessInfoThermalState s) {
         frameRow,
         worstRow,
         thermalRow,
-        [self note:@"Measured over the last second of play, before the panel opened. The game runs at 60 fps on "
-                   @"Xbox 360 (16.7 ms a frame)."],
-        [self section:@"Frame rate counter"],
-        [self row:@"Show over the game" note:@"A small counter in the corner while you play." control:self.pillSwitch],
+        [self note:@"The last second of play before the panel opened. 60 fps is 16.7 ms a frame."],
+        [self row:@"Frame rate counter" note:@"A small counter in the corner while you play." control:self.pillSwitch],
     ]];
 }
 
@@ -1158,12 +1111,6 @@ const char *rl_ios_help_pad(void) {
             return "dualsense";
     }
     return "backbone";
-}
-
-int rl_ios_game_rows(void) {
-    [defaults() registerDefaults:@{@"ios.gameRows" : @720}];
-    g_game_rows = [defaults() integerForKey:@"ios.gameRows"] == 1080 ? 1080 : 720;
-    return g_game_rows;
 }
 
 // The display's refreshes, as the game's vblank: a display link at 60 Hz on a thread of its own (the main thread

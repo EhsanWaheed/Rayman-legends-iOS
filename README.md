@@ -9,7 +9,7 @@ settings, the controller support, and a native **Metal 4** GPU backend for the S
 available). No Vulkan or MoltenVK.
 
 **[Download the latest release](https://github.com/EhsanWaheed/Rayman-legends-iOS/releases/latest)**
-(`RaymanLegendsIOS-NGF.ipa`, version 0.23). The IPA contains **no game files**: you add your own copy of the game.
+(`RaymanLegendsIOS-NGF.ipa`, version 0.24). The IPA contains **no game files**: you add your own copy of the game.
 
 Fan project, not affiliated with or endorsed by Ubisoft or Microsoft.
 
@@ -21,9 +21,9 @@ Fan project, not affiliated with or endorsed by Ubisoft or Microsoft.
   an iPhone 17 Pro Max at a nominal thermal state.
 - **Widescreen.** The game drawn at the screen's own shape (more of each level, the HUD in its corners), or 16:9
   fitted, filled or stretched.
-- **MetalFX upscaling** from the game's 720p to the screen.
-- **Low power mode** for phones that get hot: 60 fps with the game's 720p picture shown without MetalFX, filling
-  the screen.
+- **Picture quality**, one choice: **Sharp** (MetalFX upscaling from the game's 720p to the screen's full
+  resolution), **Balanced** (the default: the same, upscaling less as the phone gets hot) or **Low power** (60 fps
+  with the 720p picture stretched to the screen, no MetalFX: the least GPU work and heat).
 - **Overheat protection** (off by default): when the phone is critically hot, or hot and dropping frames, a
   steady 30 fps picture (every other frame drawn, half the GPU work, the game at full speed) until it cools.
 - **Controllers.** Backbone One (PlayStation Edition too), DualSense, DualShock 4, Xbox and other MFi
@@ -31,8 +31,9 @@ Fan project, not affiliated with or endorsed by Ubisoft or Microsoft.
   screen shows a Backbone One, or a DualSense when one is connected.
 - **Liquid Glass launcher** with your box art: Play, import the game from a folder, a ZIP or the disc image
   (checked before it is used), export and import saves.
-- **Settings panel** over the game: **L3 + R3**, a three-finger tap, or **Cmd+S**. Display, renderer, upscaler,
-  low power, controller and prompts. The game pauses while it is open.
+- **Settings panel** over the game: **L3 + R3**, a three-finger tap, or **Cmd+S**. Widescreen, screen fit,
+  picture quality, overheat protection and renderer; the frame rate and temperature; the controller. The game
+  pauses while it is open.
 
 ## What you need
 

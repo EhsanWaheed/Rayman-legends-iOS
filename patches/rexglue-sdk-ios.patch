@@ -125,6 +125,26 @@ index 789315c..979f941 100644
  class HostPathFile : public File {
   public:
    HostPathFile(uint32_t file_access, HostPathEntry* entry,
+diff --git a/include/rex/graphics/command_processor.h b/include/rex/graphics/command_processor.h
+index da8e432..d640d5f 100644
+--- a/include/rex/graphics/command_processor.h
++++ b/include/rex/graphics/command_processor.h
+@@ -169,6 +169,15 @@ class CommandProcessor {
+   virtual void PrepareForWait();
+   virtual void ReturnFromWait();
+ 
++  // What the guest learns of the GPU's progress: EVENT_WRITE_SHD's memory write (value already in guest byte
++  // order) and the INTERRUPT packet's callback. Immediately by default; a backend whose GPU runs behind the
++  // command processor can hold them until the work before them is done (the guest reuses memory on them).
++  virtual void WriteGpuEvent(uint32_t address, uint32_t value);
++  virtual void IssueGpuInterrupt(uint32_t cpu);
++  // Held events done once their GPU work has completed. wait: the command processor is idle, so it may wait a
++  // little for the GPU. Returns whether any are still held.
++  virtual bool ProcessHeldGpuEvents(bool /*wait*/) { return false; }
++
+   uint32_t ExecutePrimaryBuffer(uint32_t start_index, uint32_t end_index);
+   virtual void OnPrimaryBufferEnd() {}
+   void ExecuteIndirectBuffer(uint32_t ptr, uint32_t length);
 diff --git a/include/rex/graphics/frame_stats.h b/include/rex/graphics/frame_stats.h
 new file mode 100644
 index 0000000..93fa42d
@@ -148,10 +168,10 @@ index 0000000..93fa42d
 +}  // namespace rex::graphics
 diff --git a/include/rex/graphics/metal/command_processor.h b/include/rex/graphics/metal/command_processor.h
 new file mode 100644
-index 0000000..d0a711c
+index 0000000..89f4f6f
 --- /dev/null
 +++ b/include/rex/graphics/metal/command_processor.h
-@@ -0,0 +1,274 @@
+@@ -0,0 +1,298 @@
 +/**
 + * @file        graphics/metal/command_processor.h
 + * @brief       The Xenos command processor on Metal
@@ -258,6 +278,18 @@ index 0000000..d0a711c
 +
 +  void IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbuffer_width,
 +                 uint32_t frontbuffer_height) override;
++
++  // The GPU runs up to two frames behind: EVENT_WRITE_SHD fences held until the work before them has
++  // completed (the guest reuses memory the GPU reads in place on them, such as the vertices it rebuilds every
++  // frame: the cake Murfy eats in Fiesta de los Muertos).
++  void WriteGpuEvent(uint32_t address, uint32_t value) override;
++  void IssueGpuInterrupt(uint32_t cpu) override;
++  bool ProcessHeldGpuEvents(bool wait) override;
++
++  // Drains the autorelease pool: Metal returns encoders, command buffers, descriptors and strings autoreleased, and
++  // this thread's own pool is never drained (every encoder of a session kept, over a megabyte a second: the
++  // system ended the game after about 45 minutes on a 6 GB iPhone).
++  void OnPrimaryBufferEnd() override;
 +
 +  Shader* LoadShader(xenos::ShaderType shader_type, uint32_t guest_address,
 +                     const uint32_t* host_address, uint32_t dword_count) override;
@@ -417,6 +449,18 @@ index 0000000..d0a711c
 +  std::vector<draw_util::MemExportRange> memexport_ranges_;
 +  // gpu_frame_skip: this frame's draws and resolves skipped.
 +  bool skipping_frame_ = false;
++
++  // Events held until their submission completes (command processor thread only), in order.
++  struct HeldGpuEvent {
++    uint64_t submission;
++    bool interrupt;
++    uint32_t address_or_cpu;
++    uint32_t value;
++  };
++  void HoldGpuEvent(HeldGpuEvent event);
++  void DoGpuEvent(const HeldGpuEvent& event);
++  std::deque<HeldGpuEvent> held_gpu_events_;
++  NS::AutoreleasePool* autorelease_pool_ = nullptr;
 +  std::vector<MTL::SamplerState*> current_samplers_vertex_;
 +  std::vector<MTL::SamplerState*> current_samplers_pixel_;
 +
@@ -428,7 +472,7 @@ index 0000000..d0a711c
 +}  // namespace rex::graphics::metal
 diff --git a/include/rex/graphics/metal/encoders.h b/include/rex/graphics/metal/encoders.h
 new file mode 100644
-index 0000000..3683829
+index 0000000..d7ed226
 --- /dev/null
 +++ b/include/rex/graphics/metal/encoders.h
 @@ -0,0 +1,153 @@
@@ -564,8 +608,8 @@ index 0000000..3683829
 +// Blits: a Metal 3 blit encoder, or on Metal 4 the compute encoder.
 +class MetalBlitEncoder {
 + public:
-+  void Begin(MTL::BlitCommandEncoder* encoder) {
-+    m3_ = encoder;
++  void Begin(MTL::BlitCommandEncoder* encoder) {  // retained while open, as the others
++    m3_ = encoder->retain();
 +    compute_ = nullptr;
 +  }
 +  void Begin(MetalComputeEncoder* encoder) {
@@ -2774,7 +2818,7 @@ index 0d8f8af..b3fc75f 100644
          MachineIndependent
          GenericCodeGen
 diff --git a/src/graphics/command_processor.cpp b/src/graphics/command_processor.cpp
-index a744375..f0ed229 100644
+index a744375..1b2cf9f 100644
 --- a/src/graphics/command_processor.cpp
 +++ b/src/graphics/command_processor.cpp
 @@ -10,6 +10,7 @@
@@ -2785,7 +2829,21 @@ index a744375..f0ed229 100644
  #include <cinttypes>
  #include <cmath>
  #include <cstring>
-@@ -355,9 +356,12 @@ void CommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
+@@ -219,6 +220,13 @@ void CommandProcessor::WorkerThreadMain() {
+       PrepareForWait();
+       uint32_t loop_count = 0;
+       do {
++        // Events held for the GPU: done as it catches up (waiting for it a little instead of sleeping).
++        if (ProcessHeldGpuEvents(loop_count > 500)) {
++          rex::thread::MaybeYield();
++          loop_count++;
++          write_ptr_index = write_ptr_index_.load();
++          continue;
++        }
+         // If we spin around too much, revert to a "low-power" state.
+         if (loop_count > 500) {
+           const int wait_time_ms = 5;
+@@ -355,9 +363,12 @@ void CommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
  
    // Volatile for the WAIT_REG_MEM loop.
    const_cast<volatile uint32_t&>(regs.values[index]) = value;
@@ -2798,7 +2856,42 @@ index a744375..f0ed229 100644
  
    // Scratch register writeback.
    if (index >= XE_GPU_REG_SCRATCH_REG0 && index <= XE_GPU_REG_SCRATCH_REG7) {
-@@ -1037,7 +1041,11 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
+@@ -918,14 +929,22 @@ bool CommandProcessor::ExecutePacketType3_INTERRUPT(memory::RingBuffer* reader,
+   uint32_t cpu_mask = reader->ReadAndSwap<uint32_t>();
+   for (int n = 0; n < 6; n++) {
+     if (cpu_mask & (1 << n)) {
+-      if (graphics_system_) {
+-        graphics_system_->DispatchInterruptCallback(1, n);
+-      }
++      IssueGpuInterrupt(uint32_t(n));
+     }
+   }
+   return true;
+ }
+ 
++void CommandProcessor::WriteGpuEvent(uint32_t address, uint32_t value) {
++  memory::store(memory_->TranslatePhysical(address), value);
++}
++
++void CommandProcessor::IssueGpuInterrupt(uint32_t cpu) {
++  if (graphics_system_) {
++    graphics_system_->DispatchInterruptCallback(1, cpu);
++  }
++}
++
+ bool CommandProcessor::ExecutePacketType3_XE_SWAP(memory::RingBuffer* reader, uint32_t packet,
+                                                   uint32_t count) {
+   SCOPE_profile_cpu_f("gpu");
+@@ -1030,6 +1049,8 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
+         break;
+     }
+     if (!matched) {
++      // The value may be a held GPU event's.
++      ProcessHeldGpuEvents(false);
+       // Wait.
+       if (wait >= 0x100) {
+         PrepareForWait();
+@@ -1037,7 +1058,11 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
            // User wants it fast and dangerous.
            rex::thread::MaybeYield();
          } else {
@@ -2811,6 +2904,15 @@ index a744375..f0ed229 100644
          }
          rex::thread::SyncMemory();
          ReturnFromWait();
+@@ -1214,7 +1239,7 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_SHD(memory::RingBuffer* re
+   auto endianness = static_cast<xenos::Endian>(address & 0x3);
+   address &= ~0x3;
+   data_value = GpuSwap(data_value, endianness);
+-  memory::store(memory_->TranslatePhysical(address), data_value);
++  WriteGpuEvent(address, data_value);
+   return true;
+ }
+ 
 diff --git a/src/graphics/graphics_system.cpp b/src/graphics/graphics_system.cpp
 index 8f2fcb0..d375bfd 100644
 --- a/src/graphics/graphics_system.cpp
@@ -2868,10 +2970,10 @@ index 8f2fcb0..d375bfd 100644
        }));
 diff --git a/src/graphics/metal/command_processor.cpp b/src/graphics/metal/command_processor.cpp
 new file mode 100644
-index 0000000..81577dc
+index 0000000..e0d80d6
 --- /dev/null
 +++ b/src/graphics/metal/command_processor.cpp
-@@ -0,0 +1,1762 @@
+@@ -0,0 +1,1835 @@
 +/**
 + * @file        graphics/metal/command_processor.cpp
 + * @brief       The Xenos command processor on Metal (command_processor.h)
@@ -2887,6 +2989,8 @@ index 0000000..81577dc
 +#include <TargetConditionals.h>
 +
 +#include <algorithm>
++#include <chrono>
++#include <thread>
 +#include <cstdio>
 +#include <cstdlib>
 +#include <cstring>
@@ -3025,6 +3129,8 @@ index 0000000..81577dc
 +void MetalCommandProcessor::ShutdownContext() {
 +  EndSubmission();
 +  AwaitAllSubmissions();
++  ProcessHeldGpuEvents(false);
++  held_gpu_events_.clear();
 +  pipeline_cache_.reset();
 +  texture_cache_.reset();
 +  render_target_cache_.reset();
@@ -3058,6 +3164,10 @@ index 0000000..81577dc
 +  allocators4_.clear();
 +  command_buffer4_.reset();
 +  queue4_.reset();
++  if (autorelease_pool_) {
++    autorelease_pool_->release();
++    autorelease_pool_ = nullptr;
++  }
 +  CommandProcessor::ShutdownContext();
 +}
 +
@@ -3793,6 +3903,71 @@ index 0000000..81577dc
 +        return true;
 +      });
 +  EndFrame();
++}
++
++// GPU events.
++
++void MetalCommandProcessor::WriteGpuEvent(uint32_t address, uint32_t value) {
++  HoldGpuEvent({0, false, address, value});
++}
++
++// Interrupts aren't held: the game paces its frames on them, and holding them takes away the overlap of its
++// CPU work with the GPU's (level 1 at ~41 fps instead of 60). Held writes before one that are done by now go
++// first.
++void MetalCommandProcessor::IssueGpuInterrupt(uint32_t cpu) {
++  ProcessHeldGpuEvents(false);
++  CommandProcessor::IssueGpuInterrupt(cpu);
++}
++
++void MetalCommandProcessor::HoldGpuEvent(HeldGpuEvent event) {
++  // The work before the event on its way to the GPU, the event after it.
++  if (submission_open_) {
++    EndSubmission();
++  }
++  event.submission = submission_current_ - 1;
++  ProcessHeldGpuEvents(false);
++  if (held_gpu_events_.empty() && GetCompletedSubmission() >= event.submission) {
++    DoGpuEvent(event);
++    return;
++  }
++  held_gpu_events_.push_back(event);
++}
++
++void MetalCommandProcessor::DoGpuEvent(const HeldGpuEvent& event) {
++  if (event.interrupt) {
++    CommandProcessor::IssueGpuInterrupt(event.address_or_cpu);
++  } else {
++    CommandProcessor::WriteGpuEvent(event.address_or_cpu, event.value);
++  }
++}
++
++void MetalCommandProcessor::OnPrimaryBufferEnd() {
++  if (autorelease_pool_) {
++    autorelease_pool_->release();
++  }
++  autorelease_pool_ = NS::AutoreleasePool::alloc()->init();
++}
++
++bool MetalCommandProcessor::ProcessHeldGpuEvents(bool wait) {
++  while (!held_gpu_events_.empty()) {
++    const HeldGpuEvent event = held_gpu_events_.front();
++    if (GetCompletedSubmission() < event.submission) {
++      if (!wait) {
++        break;
++      }
++      // Idle: a short wait for the GPU, then back to checking for new commands.
++      wait = false;
++      if (metal4_) {
++        submission_event_->waitUntilSignaledValue(event.submission, 1);
++      } else {
++        std::this_thread::sleep_for(std::chrono::microseconds(200));
++      }
++      continue;
++    }
++    held_gpu_events_.pop_front();
++    DoGpuEvent(event);
++  }
++  return !held_gpu_events_.empty();
 +}
 +
 +// Draws.
@@ -4636,10 +4811,10 @@ index 0000000..81577dc
 +}  // namespace rex::graphics::metal
 diff --git a/src/graphics/metal/encoders.cpp b/src/graphics/metal/encoders.cpp
 new file mode 100644
-index 0000000..7685793
+index 0000000..06bc886
 --- /dev/null
 +++ b/src/graphics/metal/encoders.cpp
-@@ -0,0 +1,325 @@
+@@ -0,0 +1,332 @@
 +/**
 + * @file        graphics/metal/encoders.cpp
 + * @brief       Command encoders over Metal 3 or Metal 4 (encoders.h)
@@ -4670,15 +4845,17 @@ index 0000000..7685793
 +
 +// Render.
 +
++// The encoders are retained while open: Metal returns them autoreleased, and the command processor drains its
++// autorelease pool after each batch of commands while a pass can stay open across batches.
 +void MetalRenderEncoder::Begin(MTL::RenderCommandEncoder* encoder) {
-+  m3_ = encoder;
++  m3_ = encoder->retain();
 +  m4_ = nullptr;
 +}
 +
 +void MetalRenderEncoder::Begin(MTL4::RenderCommandEncoder* encoder, MTL4::ArgumentTable* vertex_table,
 +                               MTL4::ArgumentTable* fragment_table) {
 +  m3_ = nullptr;
-+  m4_ = encoder;
++  m4_ = encoder->retain();
 +  tables_[0] = vertex_table;
 +  tables_[1] = fragment_table;
 +  // After everything before in the queue: render targets, resolves, texture loads.
@@ -4690,10 +4867,12 @@ index 0000000..7685793
 +void MetalRenderEncoder::End() {
 +  if (m3_) {
 +    m3_->endEncoding();
++    m3_->release();
 +    m3_ = nullptr;
 +  }
 +  if (m4_) {
 +    m4_->endEncoding();
++    m4_->release();
 +    m4_ = nullptr;
 +  }
 +}
@@ -4843,13 +5022,13 @@ index 0000000..7685793
 +// Compute.
 +
 +void MetalComputeEncoder::Begin(MTL::ComputeCommandEncoder* encoder) {
-+  m3_ = encoder;
++  m3_ = encoder->retain();
 +  m4_ = nullptr;
 +}
 +
 +void MetalComputeEncoder::Begin(MTL4::ComputeCommandEncoder* encoder, MTL4::ArgumentTable* table) {
 +  m3_ = nullptr;
-+  m4_ = encoder;
++  m4_ = encoder->retain();
 +  table_ = table;
 +  m4_commands_ = false;
 +  m4_->barrierAfterQueueStages(kAllStages, kComputeStages, MTL4::VisibilityOptionDevice);
@@ -4859,10 +5038,12 @@ index 0000000..7685793
 +void MetalComputeEncoder::End() {
 +  if (m3_) {
 +    m3_->endEncoding();
++    m3_->release();
 +    m3_ = nullptr;
 +  }
 +  if (m4_) {
 +    m4_->endEncoding();
++    m4_->release();
 +    m4_ = nullptr;
 +  }
 +}
@@ -4946,6 +5127,7 @@ index 0000000..7685793
 +void MetalBlitEncoder::End() {
 +  if (m3_) {
 +    m3_->endEncoding();
++    m3_->release();
 +    m3_ = nullptr;
 +  }
 +  compute_ = nullptr;

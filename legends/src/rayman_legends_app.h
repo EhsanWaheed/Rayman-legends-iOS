@@ -81,8 +81,8 @@ class RaymanLegendsApp : public rex::ReXApp {
                               std::filesystem::exists(bundled / "default.xex") ? bundled.string() : "");
     }
     // The game renders at 1280x720 when the video mode is below 1280x720, at 1920x1080 otherwise
-    // (sub_8267D070): a 16:9 mode under 720p gives the game's own 720p, less than half the pixels
-    // (MetalFX scales it to the screen).
+    // (sub_8267D070): always its 720p on iOS, a 16:9 mode under 720p (less than half the pixels of
+    // 1080p; MetalFX scales it to the screen).
     // The game at the screen's own shape: more of each level, nothing stretched or cut off.
     // (In the game's 720p mode.)
     if (const double aspect = rl_ios_widescreen_aspect()) {
@@ -92,10 +92,8 @@ class RaymanLegendsApp : public rex::ReXApp {
         REXCVAR_SET(present_guest_output_aspect, true);
       }
     }
-    if (rl_ios_widescreen_aspect() || rl_ios_game_rows() == 720) {
-      REXCVAR_SET(video_mode_width, 1024);
-      REXCVAR_SET(video_mode_height, 576);
-    }
+    REXCVAR_SET(video_mode_width, 1024);
+    REXCVAR_SET(video_mode_height, 576);
     // Native Metal: Metal 4, or Metal 3 as chosen in the settings.
     REXCVAR_SET(gpu_backend, std::string("metal"));
     REXCVAR_SET(metal4, rl_ios_metal4());

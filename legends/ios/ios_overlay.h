@@ -6,10 +6,6 @@
 // open the game is held at its next frame (paused). Call once, before the game starts.
 void rl_ios_overlay_start(void);
 
-// The resolution the game renders at this launch, from the settings (720 or 1080): the game picks 720p when the
-// video mode is below 1280x720, 1080p otherwise. Call once, before the game starts.
-int rl_ios_game_rows(void);
-
 // The Help screen's controller art: "dualsense" with a DualSense connected, "backbone" otherwise.
 const char *rl_ios_help_pad(void);
 
